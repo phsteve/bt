@@ -12,8 +12,8 @@ class TorrentFile(object):
         self.request_payload = {'info_hash': sha1(bencode(self.decoded['info'])).digest(),
                                 'peer_id': '-SK0001-asdfasdfasdf',
                                 'left': self.decoded['info']['length']}
-        self.peers = self.req_peers_from_tracker()
-        self.peer_list = [Peer(peer_str) for peer_str in self.peers]
+        self.peer_list = self.req_peers_from_tracker()
+        self.peers = [Peer(peer_str) for peer_str in self.peer_list]
 
     def req_peers_from_tracker(self):
         #use requests to get peer list from the announce url
@@ -28,14 +28,12 @@ class TorrentFile(object):
 class Peer(object):
     def __init__(self, peer_str):
         self.ip, self.port = self.parse_peer_str(peer_str)
+        #self.peer_id = peer_id (from tracker response)
 
     def parse_peer_str(self, peer_str):
         ip = '.'.join(str(ord(char)) for char in peer_str[:4])
         port = str(256*ord(peer_str[-2]) + ord(peer_str[-1]))
         return ip, port
-
-
-
 
 torrent = TorrentFile('torrents/flagfromserver.torrent')
 
