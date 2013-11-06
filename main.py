@@ -35,6 +35,47 @@ class Peer(object):
         port = str(256*ord(peer_str[-2]) + ord(peer_str[-1]))
         return ip, port
 
+class PeerClientFactory(ClientFactory):
+    protocol = PeerProtocol
+
+    def __init__(self, deferred):
+        self.deferred = deferred
+
+
+
+class PeerHandshakeProtocol(Protocol):
+    def __init__(self): #
+        self.handshake = Handshake()
+
+def connect_to_peer(ip, port):
+    d = defer.Deferred()
+    from twisted.internet import reactor
+    factory = PeerClientFactory(d)
+    reactor.connectTCP(ip, port, factory)
+    return d
+
+class Handshake(object):
+    def __init__(self):
+        
+
+def handshake(peer):
+    #shakes hands with one peer
+    #TODO multiple peer support
+    ip, port = peer.ip, peer.port
+
+    from twisted.internet import reactor
+    handshakes = []
+    errors = []
+
+    def got_handshake(handshake):
+        handshakes.append(handshake)
+
+    def handshake_failed(err):
+        errors.append(err)
+
+    def handshake_done(_):
+        if len(handshakes) + len(errors) == len()
+
 torrent = TorrentFile('torrents/flagfromserver.torrent')
 
 import pdb
