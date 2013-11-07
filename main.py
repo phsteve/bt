@@ -47,13 +47,13 @@ class PeerProtocol(Protocol):
     response = ''
 
     def dataReceived(self, data):
-        print 'received ' + data
+        print 'data received ' + data
         self.response += data
         #set peer.peer_id to peer_id from h
         # print Message(data, self.factory.peer)
         # self.factory.deferred.callback(data)
         #can I callback parse_handshake here?
-        self.factory.data_finished(data)
+        got_data(self.response)
 
     def connectionMade(self):
         print 'connection made to ' + self.factory.peer.ip
@@ -132,39 +132,53 @@ def get_data(peer):
     print 'attempting to connect to ' + peer.ip + ':' + str(peer.port)
     return d
 
+def got_data(data):
+    print 'got data ' + data
+    if data[1:20] == 'BitTorrent protocol':
+        print 'its a handshake'
+        received_handshake = Handshake(peer, reserved=data[20:28], peer_id=data[48:]) #need info_hash and peer_id checking
+        print 'got the handshake' + received_handshake.handshake
+        messages.append(received_handshake)
+    else:
+        print 'its a message'
+        received_message = Message(data, peer)
+        messages.append(received_message)
+
 
 
 def main(peers):
     
     from twisted.internet import reactor
     
-    data = []
+    messages = []
     errors = []
 
-    def got_data(datum):
-        print 'got data ' + datum
-        data.append(datum)
-        # print Message(datum)
-        #return Message(datum)
 
-    def parse_handshake(datum):
-        print 'in parse_handshake'
-        if datum[1:20] == 'BitTorrent protocol':
-            print 'parsing the handshake'
-            received_handshake = Handshake(peer, reserved=datum[20:28], info_hash=datum[28:48], peer_id=datum[48:])
-            print 'got the handshake: ' + received_handshake.handshake
-            return datum
 
-        else:
-            return datum
+            #what to do with the message/handshake after receiving it
+            
+        # data.append(data)
+        # print Message(data)
+        #return Message(data)
+
+    # def parse_handshake(data):
+    #     print 'in parse_handshake'
+    #     if data[1:20] == 'BitTorrent protocol':
+    #         print 'parsing the handshake'
+    #         received_handshake = Handshake(peer, reserved=data[20:28], info_hash=data[28:48], peer_id=data[48:])
+    #         print 'got the handshake: ' + received_handshake.handshake
+    #         return data
+
+    #     else:
+    #         return data
 
     def data_failed(err):
         errors.append(err)
 
-    def data_done(_):
-        if len(data) + len(errors) == len(peers):
-        # if data:
-            reactor.stop()
+    # def data_done():
+    #     if len(data) + len(errors) == len(peers):
+    #     # if data:
+    #         reactor.stop()
 
     for peer in peers:
         #ip, port = peer.ip, peer.port
@@ -172,17 +186,20 @@ def main(peers):
         # print peer.port
         d = get_data(peer)
         if d:
-            d.addCallback(parse_handshake)
+            # d.addCallback(parse_handshake)
 
             d.addCallbacks(got_data, data_failed)
-            d.addBoth(data_done)
+            # d.addBoth(data_done)
 
     reactor.run()
-    # for datum in data:
-    #     print datum
+    # for data in data:
+    #     print data
+    # import pdb
+    # pdb.set_trace()
 
 torrent = TorrentFile('torrents/flagfromserver.torrent')
 main(torrent.peers)
+
 
 #When I receive a handshake, i want to make a handshake object from that and check that peer_id and info_hash
 # are what they should be.
