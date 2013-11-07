@@ -47,8 +47,13 @@ class PeerProtocol(Protocol):
     response = ''
 
     def dataReceived(self, data):
-        print data
+        print 'received ' + data
         self.response += data
+        #set peer.peer_id to peer_id from h
+        # print Message(data, self.factory.peer)
+        # self.factory.deferred.callback(data)
+        #can I callback parse_handshake here?
+        self.factory.data_finished(data)
 
     def connectionMade(self):
         print 'connection made to ' + self.factory.peer.ip
@@ -78,6 +83,7 @@ class PeerClientFactory(ClientFactory):
         self.peer = peer
 
     def data_finished(self, data):
+        print 'in data_finished'
         if self.deferred is not None:
             d, self.deferred = self.deferred, None
             d.callback(data)
@@ -89,11 +95,11 @@ class PeerClientFactory(ClientFactory):
 
 class Handshake(object):
     # should this inherit from Message?
-    def __init__(self, peer):
+    def __init__(self, peer, pstr='BitTorrent protocol', reserved='\x00\x00\x00\x00\x00\x00\x00\x00', peer_id=MY_PEER_ID):
         self.peer = peer
-        self.pstr = 'BitTorrent protocol'
+        self.pstr = pstr
         self.pstrlen = chr(len(self.pstr))
-        self.reserved = '\x00\x00\x00\x00\x00\x00\x00\x00'
+        self.reserved = reserved
         self.info_hash = peer.info_hash
         self.peer_id = MY_PEER_ID
         self.handshake = self.pstrlen + self.pstr + self.reserved + self.info_hash + self.peer_id
@@ -101,17 +107,22 @@ class Handshake(object):
         #TODO verify that the return handshake's info_hash and peer_id are accurate
 
 class Message(object):
+    #deal with keep-alive message type
+
     def __init__(self, message, peer):
+        message_types = {0: 'choke', 1: 'unchoke', 2: 'interested', 3: 'not interested',
+                         4: 'have', 5: 'bitfield', 6: 'request', 7: 'piece', 8: 'cancel', 9: 'port'}
         self.message = message
-        self.peer_id = None
-        self.info_hash = None
+        # self.peer_id = peer.peer_id
+        self.info_hash = peer.info_hash
+        if not message:
+            self.message_type = 'keep-alive'
+        else:
+            self.message_type = message_types[self.message[4]]
+        self.message_len = ord(self.message[:4]) #this might not be right
+        self.payload = self.message[5:]
 
-    #if message is a handshake:
-    #   parse message, check that peer_id and info_hash match
-
-    #else:
-    #   do something else
-
+    #work out getting incomplete messages and buffering
 
 def get_data(peer):
     d = defer.Deferred()
@@ -121,6 +132,8 @@ def get_data(peer):
     print 'attempting to connect to ' + peer.ip + ':' + str(peer.port)
     return d
 
+
+
 def main(peers):
     
     from twisted.internet import reactor
@@ -129,13 +142,28 @@ def main(peers):
     errors = []
 
     def got_data(datum):
+        print 'got data ' + datum
         data.append(datum)
+        # print Message(datum)
+        #return Message(datum)
+
+    def parse_handshake(datum):
+        print 'in parse_handshake'
+        if datum[1:20] == 'BitTorrent protocol':
+            print 'parsing the handshake'
+            received_handshake = Handshake(peer, reserved=datum[20:28], info_hash=datum[28:48], peer_id=datum[48:])
+            print 'got the handshake: ' + received_handshake.handshake
+            return datum
+
+        else:
+            return datum
 
     def data_failed(err):
         errors.append(err)
 
     def data_done(_):
         if len(data) + len(errors) == len(peers):
+        # if data:
             reactor.stop()
 
     for peer in peers:
@@ -144,16 +172,24 @@ def main(peers):
         # print peer.port
         d = get_data(peer)
         if d:
+            d.addCallback(parse_handshake)
+
             d.addCallbacks(got_data, data_failed)
             d.addBoth(data_done)
 
     reactor.run()
-
     # for datum in data:
     #     print datum
 
 torrent = TorrentFile('torrents/flagfromserver.torrent')
 main(torrent.peers)
+
+#When I receive a handshake, i want to make a handshake object from that and check that peer_id and info_hash
+# are what they should be.
+#Then, when I receive a message, I want to make a Message object and then choose what to do with that message
+# using Message.message_type.
+#I'm having trouble with getting the callbacks behaving correctly (line ~168) to do this. Do I need to do something
+# with the dataReceived interface in the peer protocol?
 
 # import pdb
 # pdb.set_trace()
