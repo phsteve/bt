@@ -45,6 +45,7 @@ class Peer(object):
 
 class PeerProtocol(Protocol):
     response = ''
+    messages = []
 
     def dataReceived(self, data):
         print 'data received ' + data
@@ -53,7 +54,19 @@ class PeerProtocol(Protocol):
         # print Message(data, self.factory.peer)
         # self.factory.deferred.callback(data)
         #can I callback parse_handshake here?
-        got_data(self.response)
+        self.got_data(self.response)
+
+    def got_data(self, data):
+        print 'got data ' + data
+        if data[1:20] == 'BitTorrent protocol':
+            print 'its a handshake'
+            received_handshake = Handshake(self.factory.peer, reserved=data[20:28], peer_id=data[48:]) #need info_hash and peer_id checking
+            print 'got the handshake' + received_handshake.handshake
+            self.messages.append(received_handshake)
+        else:
+            print 'its a message'
+            received_message = Message(data, peer)
+            self.messages.append(received_message)
 
     def connectionMade(self):
         print 'connection made to ' + self.factory.peer.ip
@@ -132,17 +145,7 @@ def get_data(peer):
     print 'attempting to connect to ' + peer.ip + ':' + str(peer.port)
     return d
 
-def got_data(data):
-    print 'got data ' + data
-    if data[1:20] == 'BitTorrent protocol':
-        print 'its a handshake'
-        received_handshake = Handshake(peer, reserved=data[20:28], peer_id=data[48:]) #need info_hash and peer_id checking
-        print 'got the handshake' + received_handshake.handshake
-        messages.append(received_handshake)
-    else:
-        print 'its a message'
-        received_message = Message(data, peer)
-        messages.append(received_message)
+
 
 
 
@@ -185,10 +188,10 @@ def main(peers):
         # print peer.ip
         # print peer.port
         d = get_data(peer)
-        if d:
+        # if d:
             # d.addCallback(parse_handshake)
 
-            d.addCallbacks(got_data, data_failed)
+            # d.addCallbacks(got_data, data_failed)
             # d.addBoth(data_done)
 
     reactor.run()
