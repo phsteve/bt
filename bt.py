@@ -5,22 +5,34 @@ from hashlib import sha1
 from twisted.internet import defer
 from twisted.internet.protocol import Protocol, ClientFactory
 
-from message import Message
+from message import Message, MessageHandler
 
 # import handlers
 
 MY_PEER_ID = '-SK0001-asdfasdfasdf'
 
 class Controller(object):
-    def __init__(self, )
-    self.
-    #info_hash
-    #peer list
-    #---
+    def __init__(self, torrent):
+        self.peer_dict = {}
+        self.torrent = torrent
+        self.info_hash = torrent.info_hash
+        self.message_handler = MessageHandler()
+
+    def add_peer(self, peer):
+        self.peer_dict[peer.peer_id] = peer
+        # self.connect(peer)
+
+    def set_peer_status(self, peer, status_values):
+        for key in status_values:
+            self.peer_dict[peer.peer_id].status[key] = status_values[key]
+
+    def set_peer_has_pieces(self, peer_id, bitstr):
+        self.peer_dict[peer_id].has_pieces = bitstr
+
 
 class TorrentFile(object):
     def __init__(self, filepath):
-        self = open(filepath, 'rb').read()
+        self.f = open(filepath, 'rb').read()
         self.decoded = bdecode(self.f)
         self.announce_url = self.decoded['announce']
         self.info_hash = sha1(bencode(self.decoded['info'])).digest()
@@ -43,13 +55,15 @@ class TrackerResponse(object):
         return peers
 
 class Peer(object):
-    def __init__(self, peer_str, info_hash, peer_id=None, shook_hands_already=False, status=[1,0,1,0]):
+    def __init__(self, peer_str, info_hash, peer_id=None, shook_hands_already=False,
+                 status={'am-choking': 1,'am_interested': 0, 'peer_choking': 1, 'peer_interested':0}):
         self.ip, self.port = self.parse_peer_str(peer_str)
+        #probably kill this
         self.info_hash = info_hash
         self.peer_id = peer_id
         self.shook_hands_already = shook_hands_already
         self.has_pieces = 0 ####
-        self.status = status # status is 4-item list, values of am_choking, am_interested, peer_choking, peer_interested
+        self.status = status # status is 4-item dict, values of am_choking, am_interested, peer_choking, peer_interested
         # self.payload = payload
 
     def parse_peer_str(self, peer_str):
@@ -71,10 +85,10 @@ class Handshake(object):
 class PeerProtocol(Protocol):
     buff = ''
 
-    def __init__(self, factory, deferred, info_hash):
+    def __init__(self, factory, controller, deferred):
         self.factory = factory
+        self.controller = controller
         self.deferred = deferred
-        self.info_hash = info_hash
 
     def connectionMade(self):
         # self.factory.peers.append(self)
@@ -84,7 +98,9 @@ class PeerProtocol(Protocol):
         # print 'sent the handshake'
         # pass
         print 'connection made to ' + self.factory.peer.ip
-        sent_handshake = Handshake(self.info_hash).handshake
+        # import pdb
+        # pdb.set_trace()
+        sent_handshake = Handshake(self.controller.info_hash).handshake
         self.transport.write(sent_handshake)
         #send handshake
 
@@ -98,7 +114,6 @@ class PeerProtocol(Protocol):
             reserved = data[20:28]
             info_hash = data[28:48]
             peer_id = data[48:]
-            self.factory.peer.peer_id = peer_id
             # implement peer_id/info_hash checking
             # if peer_id not in self.factory.peer_dict:
             #     self.transport.loseConnection()
@@ -108,6 +123,9 @@ class PeerProtocol(Protocol):
                 # self.factory.peer_dict[peer_id] = Peer()
             received_handshake = Handshake(info_hash, pstr=pstr, reserved=reserved,
                                            peer_id=peer_id)
+            self.factory.peer.peer_id = peer_id
+            self.controller.add_peer(self.factory.peer)
+            self.controller.peer_dict[peer_id].shook_hands_already = True
             print 'handshake received: ' + received_handshake.handshake
 
             #check if peer_id and info_hash are correct
@@ -119,7 +137,7 @@ class PeerProtocol(Protocol):
         else:
             peer_id = self.factory.peer.peer_id
             received_message = Message(data, peer_id=peer_id)
-            received_message.handle()
+            self.controller.message_handler.handle(received_message, self.controller)
             # import pdb
             # pdb.set_trace()
             print 'message received: ' + received_message.message
@@ -128,23 +146,16 @@ class PeerProtocol(Protocol):
     def connectionLost(self, reason):
         print 'connection lost from: ' + self.factory.peer.ip
 
-#peer dict should be in factory
 class PeerClientFactory(ClientFactory):
     protocol = PeerProtocol
 
-    def __init__(self, deferred, peer, info_hash):
+    def __init__(self, deferred, peer, controller):
         self.deferred = deferred
-        #how do i deal with multiple peers?
         self.peer = peer
-        self.info_hash = info_hash
+        self.controller = controller
 
     def buildProtocol(self, addr):
-        return PeerProtocol(self, self.deferred, self.info_hash)
-
-    def data_finished(self, data):
-        if self.deferred is not None:
-            d, self.deferred = self.deferred, None
-            d.callback(data)
+        return PeerProtocol(self, self.controller, self.deferred)
 
     def clientConnectionFailed(self, connector, reason):
         if self.deferred is not None:
@@ -152,47 +163,38 @@ class PeerClientFactory(ClientFactory):
             d.errback(reason)
 
 
-def connect(peer, info_hash):
-    # d = defer.DeferredList([defer.Deferred() for _ in peers])
-    # from twisted.internet import reactor
-    # #one factory per peer???
-    # factory = PeerClientFactory(d)
-    # reactor.connectTCP(peer.ip, peer.port, factory)
-    # return d
 
-    #This creates a new factory for each peer (i think?) Maybe use DeferredList?
+def connect(peer, controller):
     d = defer.Deferred()
     from twisted.internet import reactor
-    factory = PeerClientFactory(d, peer, info_hash)
+    factory = PeerClientFactory(d, peer, controller)
     reactor.connectTCP(peer.ip, peer.port, factory)
     print 'attempting to connect to ' + peer.ip + ':' + str(peer.port)
     return d
 
 
+
 def main():
-    errors = []
+    # errors = []
     torrent = TorrentFile('torrents/flagfromserver.torrent')
+    controller = Controller(torrent)
     tracker_response = TrackerResponse(torrent)
     peers = tracker_response.peers
-
-
-    def got_data(data):
-        print 'in got data'
-        print data
-
-    def data_failed(err):
-        errors.append(err)
-
+    #this needs to be changed to update when the controller gets new peers from the tracker
     for peer in peers:
-        d = connect(peer, torrent.info_hash)
-        d.addCallbacks(got_data, data_failed)
+        connect(peer, controller)
+        # d.addCallbacks(data_finished, data_failed)
+    # import pdb
+    # pdb.set_trace()
+
 
     from twisted.internet import reactor
     reactor.run()
-
+    import pdb
+    pdb.set_trace()
 
     
-    errors = []
+    # errors = []
 
 main()
 

@@ -14,46 +14,55 @@ class Message(object):
         # self.peer_id = peer.peer_id
         # self.info_hash = peer.info_hash
         if not message:
-            self.message_type = 'keep-alive'
+            self.type = 'keep-alive'
         else:
-            self.message_type = message_types[ord(self.message[4])]
+            self.type = message_types[ord(self.message[4])]
         self.message_len = struct.unpack('!i', message[:4])[0] #this might not be right
-        self.payload = self.message[5:] 
+        self.payload = self.message[5:]
+
+class MessageHandler(object):
+    def __init__(self):
         self.handler = {'choke': self.choke_handler, 'unchoke': self.unchoke_handler, 'interested': self.interested_handler,
                         'not interested': self.notInterested_handler, 'have': self.have_handler, 'bitfield': self.bitfield_handler,
                         'request': self.request_handler, 'piece': self.piece_handler, 'cancel': self.cancel_handler, 'port': self.port_handler}
 
-    def handle(self):
-        self.handler[self.message_type]()
+    def handle(self, message, controller):
+        self.handler[message.type](message, controller)
 
-    def choke_handler(self):
+    def choke_handler(self, message, controller):
+        controller.set_peer_status(message.peer_id, {'peer_choking':1})
+
+    def unchoke_handler(self, message, controller):
+        controller.set_peer_status(message.peer_id, {'peer_choking':0})
+
+    def interested_handler(self, message, controller):
+        controller.set_peer_status(message.peer_id, {'peer_interested':1})
+
+    def notInterested_handler(self, message, controller):
+        controller.set_peer_status(message.peer_id, {'peer_interested':0})
+
+    def have_handler(self, message, controller):
         pass
 
-    def unchoke_handler(self):
-        pass
+    def bitfield_handler(self, message, controller):
+        # import pdb
+        # pdb.set_trace()
+        controller.set_peer_has_pieces(message.peer_id, bitstring.BitArray(bytes=message.payload))
 
-    def interested_handler(self):
-        pass
-
-    def notInterested_handler(self):
-        pass
-
-    def have_handler(self):
-        pass
-
-    def bitfield_handler(self):
-        if self.peer_id:
-            
             #set peer.has_pieces = bitfield
 
-    def request_handler(self):
+    def request_handler(self, message, controller):
         pass
 
-    def piece_handler(self):
+    def piece_handler(self, message, controller):
         pass
 
-    def cancel_handler(self):
+    def cancel_handler(self, message, controller):
         pass
 
-    def port_handler(self):
+    def port_handler(self, message, controller):
         pass
+
+    #info_hash
+    #peer list
+    #---
