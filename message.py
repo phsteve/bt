@@ -1,5 +1,5 @@
-from bt import Message
 import bitstring
+import struct
 
 # {0: 'choke', 1: 'unchoke', 2: 'interested', 3: 'not interested',
 #                          4: 'have', 5: 'bitfield', 6: 'request', 7: 'piece', 8: 'cancel', 9: 'port'}
@@ -18,34 +18,42 @@ class Message(object):
         else:
             self.message_type = message_types[ord(self.message[4])]
         self.message_len = struct.unpack('!i', message[:4])[0] #this might not be right
-        self.payload = self.message[5:]
+        self.payload = self.message[5:] 
+        self.handler = {'choke': self.choke_handler, 'unchoke': self.unchoke_handler, 'interested': self.interested_handler,
+                        'not interested': self.notInterested_handler, 'have': self.have_handler, 'bitfield': self.bitfield_handler,
+                        'request': self.request_handler, 'piece': self.piece_handler, 'cancel': self.cancel_handler, 'port': self.port_handler}
 
-def choke_handler():
-    pass
+    def handle(self):
+        self.handler[self.message_type]()
 
-def unchoke_handler():
-    pass
+    def choke_handler(self):
+        pass
 
-def interested_handler():
-    pass
+    def unchoke_handler(self):
+        pass
 
-def notInterested_handler():
-    pass
+    def interested_handler(self):
+        pass
 
-def have_handler():
-    pass
+    def notInterested_handler(self):
+        pass
 
-def bitfield_handler():
-    
+    def have_handler(self):
+        pass
 
-def request_handler():
-    pass
+    def bitfield_handler(self):
+        if self.peer_id:
+            
+            #set peer.has_pieces = bitfield
 
-def piece_handler():
-    pass
+    def request_handler(self):
+        pass
 
-def cancel_handler():
-    pass
+    def piece_handler(self):
+        pass
 
-def port_handler():
-    pass
+    def cancel_handler(self):
+        pass
+
+    def port_handler(self):
+        pass

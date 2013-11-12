@@ -5,14 +5,22 @@ from hashlib import sha1
 from twisted.internet import defer
 from twisted.internet.protocol import Protocol, ClientFactory
 
+from message import Message
+
 # import handlers
 
 MY_PEER_ID = '-SK0001-asdfasdfasdf'
 
+class Controller(object):
+    def __init__(self, )
+    self.
+    #info_hash
+    #peer list
+    #---
 
 class TorrentFile(object):
     def __init__(self, filepath):
-        self.f = open(filepath, 'rb').read()
+        self = open(filepath, 'rb').read()
         self.decoded = bdecode(self.f)
         self.announce_url = self.decoded['announce']
         self.info_hash = sha1(bencode(self.decoded['info'])).digest()
@@ -35,11 +43,13 @@ class TrackerResponse(object):
         return peers
 
 class Peer(object):
-    def __init__(self, peer_str, info_hash, peer_id=None, shook_hands_already=False):
+    def __init__(self, peer_str, info_hash, peer_id=None, shook_hands_already=False, status=[1,0,1,0]):
         self.ip, self.port = self.parse_peer_str(peer_str)
         self.info_hash = info_hash
         self.peer_id = peer_id
         self.shook_hands_already = shook_hands_already
+        self.has_pieces = 0 ####
+        self.status = status # status is 4-item list, values of am_choking, am_interested, peer_choking, peer_interested
         # self.payload = payload
 
     def parse_peer_str(self, peer_str):
@@ -58,28 +68,12 @@ class Handshake(object):
         self.peer_id = peer_id
         self.handshake = self.pstrlen + self.pstr + self.reserved + self.info_hash + self.peer_id
 
-class Message(object):
-    #deal with keep-alive message type
-
-    def __init__(self, message, peer_id=None): #peer?
-        message_types = {0: 'choke', 1: 'unchoke', 2: 'interested', 3: 'not interested',
-                         4: 'have', 5: 'bitfield', 6: 'request', 7: 'piece', 8: 'cancel', 9: 'port'}
-        self.message = message
-        self.peer_id = peer_id
-        # self.peer_id = peer.peer_id
-        # self.info_hash = peer.info_hash
-        if not message:
-            self.message_type = 'keep-alive'
-        else:
-            self.message_type = message_types[ord(self.message[4])]
-        self.message_len = struct.unpack('!i', message[:4])[0] #this might not be right
-        self.payload = self.message[5:]
-
 class PeerProtocol(Protocol):
-    response = ''
+    buff = ''
 
-    def __init__(self, factory, info_hash):
+    def __init__(self, factory, deferred, info_hash):
         self.factory = factory
+        self.deferred = deferred
         self.info_hash = info_hash
 
     def connectionMade(self):
@@ -96,7 +90,9 @@ class PeerProtocol(Protocol):
 
 
     def dataReceived(self, data):
+        #buffer handling
         print 'data received: ' + data
+
         if data[1:20] == 'BitTorrent protocol':
             pstr = data[1:20]
             reserved = data[20:28]
@@ -122,10 +118,12 @@ class PeerProtocol(Protocol):
             pass
         else:
             peer_id = self.factory.peer.peer_id
-            received_message = Message(data, peer_id)
-            import pdb
-            pdb.set_trace()
+            received_message = Message(data, peer_id=peer_id)
+            received_message.handle()
+            # import pdb
+            # pdb.set_trace()
             print 'message received: ' + received_message.message
+            self.deferred.callback(received_message.message)
 
     def connectionLost(self, reason):
         print 'connection lost from: ' + self.factory.peer.ip
@@ -136,11 +134,12 @@ class PeerClientFactory(ClientFactory):
 
     def __init__(self, deferred, peer, info_hash):
         self.deferred = deferred
+        #how do i deal with multiple peers?
         self.peer = peer
         self.info_hash = info_hash
 
     def buildProtocol(self, addr):
-        return PeerProtocol(self, self.info_hash)
+        return PeerProtocol(self, self.deferred, self.info_hash)
 
     def data_finished(self, data):
         if self.deferred is not None:
@@ -153,7 +152,7 @@ class PeerClientFactory(ClientFactory):
             d.errback(reason)
 
 
-def get_messages(peer, info_hash):
+def connect(peer, info_hash):
     # d = defer.DeferredList([defer.Deferred() for _ in peers])
     # from twisted.internet import reactor
     # #one factory per peer???
@@ -176,14 +175,16 @@ def main():
     tracker_response = TrackerResponse(torrent)
     peers = tracker_response.peers
 
+
     def got_data(data):
+        print 'in got data'
         print data
 
     def data_failed(err):
         errors.append(err)
 
     for peer in peers:
-        d = get_messages(peer, torrent.info_hash)
+        d = connect(peer, torrent.info_hash)
         d.addCallbacks(got_data, data_failed)
 
     from twisted.internet import reactor
