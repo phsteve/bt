@@ -5,6 +5,8 @@ from hashlib import sha1
 from twisted.internet import defer
 from twisted.internet.protocol import Protocol, ClientFactory
 
+# import handlers
+
 MY_PEER_ID = '-SK0001-asdfasdfasdf'
 
 
@@ -59,10 +61,11 @@ class Handshake(object):
 class Message(object):
     #deal with keep-alive message type
 
-    def __init__(self, message): #peer?
+    def __init__(self, message, peer_id=None): #peer?
         message_types = {0: 'choke', 1: 'unchoke', 2: 'interested', 3: 'not interested',
                          4: 'have', 5: 'bitfield', 6: 'request', 7: 'piece', 8: 'cancel', 9: 'port'}
         self.message = message
+        self.peer_id = peer_id
         # self.peer_id = peer.peer_id
         # self.info_hash = peer.info_hash
         if not message:
@@ -99,6 +102,7 @@ class PeerProtocol(Protocol):
             reserved = data[20:28]
             info_hash = data[28:48]
             peer_id = data[48:]
+            self.factory.peer.peer_id = peer_id
             # implement peer_id/info_hash checking
             # if peer_id not in self.factory.peer_dict:
             #     self.transport.loseConnection()
@@ -114,10 +118,13 @@ class PeerProtocol(Protocol):
             #if they're not, disconnect
 
             # received_handshake = Handshake()
+        elif not data:
+            pass
         else:
+            peer_id = self.factory.peer.peer_id
+            received_message = Message(data, peer_id)
             import pdb
             pdb.set_trace()
-            received_message = Message(data)
             print 'message received: ' + received_message.message
 
     def connectionLost(self, reason):
@@ -153,6 +160,8 @@ def get_messages(peer, info_hash):
     # factory = PeerClientFactory(d)
     # reactor.connectTCP(peer.ip, peer.port, factory)
     # return d
+
+    #This creates a new factory for each peer (i think?) Maybe use DeferredList?
     d = defer.Deferred()
     from twisted.internet import reactor
     factory = PeerClientFactory(d, peer, info_hash)
