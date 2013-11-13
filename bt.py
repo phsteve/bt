@@ -12,13 +12,15 @@ from message import Message, MessageHandler
 
 #general O-O organization feedback
 
-#buffering, error handling (peer_id/info_hash mismatches, invalid bitfields etc)
+#error handling (peer_id/info_hash mismatches, invalid bitfields etc)
 
-#am I even using Twisted properly??? I'm not firing the deferreds, so why use them?
+#am I even using Twisted properly???
 
 #doesn't connect to second peer.
 
 #what should i do about testing?
+
+#buffering
 
 MY_PEER_ID = '-SK0001-asdfasdfasdf'
 
@@ -40,8 +42,8 @@ class Controller(object):
     def set_peer_has_pieces(self, peer_id, bitstr):
         self.peer_dict[peer_id].has_pieces = bitstr
 
-
-
+    def set_peer_has_pieces_by_index(self, peer_id, index):
+        self.peer_dict[peer_id].has_pieces.overwrite('0b1', index)
 
 class TorrentFile(object):
     def __init__(self, filepath):
@@ -77,6 +79,7 @@ class Peer(object):
         self.shook_hands_already = shook_hands_already
         self.has_pieces = 0
         self.status = status # status is 4-item dict, values of am_choking, am_interested, peer_choking, peer_interested
+        self.messages_received = []
         # self.payload = payload
 
     def parse_peer_str(self, peer_str):
@@ -109,36 +112,24 @@ class PeerProtocol(Protocol):
         # self.deferred = deferred
 
     def connectionMade(self):
-        # self.factory.peers.append(self)
-        # handshake = Handshake().handshake
-        # print 'sending ' + handshake
-        # self.transport.write(handshake)
-        # print 'sent the handshake'
-        # pass
         print 'connection made to ' + self.factory.peer.ip
         # import pdb
         # pdb.set_trace()
         sent_handshake = Handshake(self.controller.info_hash).handshake
         self.transport.write(sent_handshake)
-        #send handshake
 
-
-    def dataReceived(self, data):
+    def dataReceived(self, bytes):
         #buffer handling
-        print 'data received: ' + repr(data)
+        print 'bytes received: ' + repr(bytes)
 
-        if data[1:20] == 'BitTorrent protocol':
-            pstr = data[1:20]
-            reserved = data[20:28]
-            info_hash = data[28:48]
-            peer_id = data[48:]
+        if bytes[1:20] == 'BitTorrent protocol':
+            pstr = bytes[1:20]
+            reserved = bytes[20:28]
+            info_hash = bytes[28:48]
+            peer_id = bytes[48:]
             # implement peer_id/info_hash checking
-            # if peer_id not in self.factory.peer_dict:
-            #     self.transport.loseConnection()
-                #deal with info_hash
             # else:
                 #need to check if peer already shook hands
-                # self.factory.peer_dict[peer_id] = Peer()
             received_handshake = Handshake(info_hash, pstr=pstr, reserved=reserved,
                                            peer_id=peer_id)
             self.factory.peer.peer_id = peer_id
@@ -151,17 +142,25 @@ class PeerProtocol(Protocol):
 
             #should i store the handshake somewhere?
 
-            # received_handshake = Handshake()
-        elif not data:
+        elif not bytes:
             pass
         else:
             peer_id = self.factory.peer.peer_id
-            received_message = Message(data, peer_id=peer_id)
+            #message splitting
+            messages = Message.split_message(bytes, peer_id)
 
-            self.controller.message_handler.handle(received_message, self.controller)
+            for message in messages:
+                self.controller.peer_dict[message.peer_id].messages_received.append(message)
+                self.controller.message_handler.handle(message, self.controller)
+            import pdb
+            pdb.set_trace()
+
+
+
+            # self.controller.message_handler.handle(received_message, self.controller)
             # import pdb
             # pdb.set_trace()
-            print 'message received: ' + received_message.message
+            #print 'message received: ' + received_message.message
 
     def connectionLost(self, reason):
         print 'connection lost from: ' + self.factory.peer.ip
@@ -178,7 +177,6 @@ class PeerClientFactory(ClientFactory):
         return PeerProtocol(self, self.controller) #deferred
 
 def main():
-    # errors = []
     torrent = TorrentFile('torrents/flagfromserver.torrent')
     controller = Controller(torrent)
     tracker_response = TrackerResponse(torrent)
@@ -186,7 +184,7 @@ def main():
     #this needs to be changed to update when the controller gets new peers from the tracker
     for peer in peers:
         peer.connect(controller)
-        # d.addCallbacks(data_finished, data_failed)
+        #never gets to subsequent peers
     # import pdb
     # pdb.set_trace()
 
