@@ -4,7 +4,6 @@ import struct
 # {0: 'choke', 1: 'unchoke', 2: 'interested', 3: 'not interested',
 #                          4: 'have', 5: 'bitfield', 6: 'request', 7: 'piece', 8: 'cancel', 9: 'port'}
 class Message(object):
-    #deal with keep-alive message type
 
     def __init__(self, message, peer_id=None): #peer?
         message_types = {0: 'choke', 1: 'unchoke', 2: 'interested', 3: 'not interested',
@@ -27,6 +26,8 @@ class MessageHandler(object):
                         'request': self.request_handler, 'piece': self.piece_handler, 'cancel': self.cancel_handler, 'port': self.port_handler}
 
     def handle(self, message, controller):
+        import pdb
+        pdb.set_trace()
         self.handler[message.type](message, controller)
 
     def choke_handler(self, message, controller):
@@ -43,6 +44,7 @@ class MessageHandler(object):
 
     def have_handler(self, message, controller):
         pass
+
 
     def bitfield_handler(self, message, controller):
         # import pdb

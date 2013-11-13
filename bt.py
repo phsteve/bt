@@ -7,7 +7,18 @@ from twisted.internet.protocol import Protocol, ClientFactory
 
 from message import Message, MessageHandler
 
-# import handlers
+#TODO: MessageHandler seems almost redundant, since I'm just doing everything in
+#Controller anyway...
+
+#general O-O organization feedback
+
+#buffering, error handling (peer_id/info_hash mismatches, invalid bitfields etc)
+
+#am I even using Twisted properly??? I'm not firing the deferreds, so why use them?
+
+#doesn't connect to second peer.
+
+#what should i do about testing?
 
 MY_PEER_ID = '-SK0001-asdfasdfasdf'
 
@@ -28,6 +39,8 @@ class Controller(object):
 
     def set_peer_has_pieces(self, peer_id, bitstr):
         self.peer_dict[peer_id].has_pieces = bitstr
+
+
 
 
 class TorrentFile(object):
@@ -62,7 +75,7 @@ class Peer(object):
         self.info_hash = info_hash
         self.peer_id = peer_id
         self.shook_hands_already = shook_hands_already
-        self.has_pieces = 0 ####
+        self.has_pieces = 0
         self.status = status # status is 4-item dict, values of am_choking, am_interested, peer_choking, peer_interested
         # self.payload = payload
 
@@ -71,10 +84,15 @@ class Peer(object):
         port = 256*ord(peer_str[-2]) + ord(peer_str[-1])
         return ip, port
 
+    def connect(self, controller):
+        from twisted.internet import reactor
+        factory = PeerClientFactory(self, controller)
+        reactor.connectTCP(self.ip, self.port, factory)
+        print 'attempting to connect to ' + self.ip + ':' + str(self.port)
+
 class Handshake(object):
     # should this inherit from Message?
     def __init__(self, info_hash, pstr='BitTorrent protocol', reserved='\x00\x00\x00\x00\x00\x00\x00\x00', peer_id=MY_PEER_ID):
-        # self.peer = peer
         self.pstr = pstr
         self.pstrlen = chr(len(self.pstr))
         self.reserved = reserved
@@ -85,10 +103,10 @@ class Handshake(object):
 class PeerProtocol(Protocol):
     buff = ''
 
-    def __init__(self, factory, controller, deferred):
+    def __init__(self, factory, controller):
         self.factory = factory
         self.controller = controller
-        self.deferred = deferred
+        # self.deferred = deferred
 
     def connectionMade(self):
         # self.factory.peers.append(self)
@@ -107,7 +125,7 @@ class PeerProtocol(Protocol):
 
     def dataReceived(self, data):
         #buffer handling
-        print 'data received: ' + data
+        print 'data received: ' + repr(data)
 
         if data[1:20] == 'BitTorrent protocol':
             pstr = data[1:20]
@@ -131,17 +149,19 @@ class PeerProtocol(Protocol):
             #check if peer_id and info_hash are correct
             #if they're not, disconnect
 
+            #should i store the handshake somewhere?
+
             # received_handshake = Handshake()
         elif not data:
             pass
         else:
             peer_id = self.factory.peer.peer_id
             received_message = Message(data, peer_id=peer_id)
+
             self.controller.message_handler.handle(received_message, self.controller)
             # import pdb
             # pdb.set_trace()
             print 'message received: ' + received_message.message
-            self.deferred.callback(received_message.message)
 
     def connectionLost(self, reason):
         print 'connection lost from: ' + self.factory.peer.ip
@@ -149,30 +169,13 @@ class PeerProtocol(Protocol):
 class PeerClientFactory(ClientFactory):
     protocol = PeerProtocol
 
-    def __init__(self, deferred, peer, controller):
-        self.deferred = deferred
+    def __init__(self, peer, controller):
+        # self.deferred = deferred
         self.peer = peer
         self.controller = controller
 
     def buildProtocol(self, addr):
-        return PeerProtocol(self, self.controller, self.deferred)
-
-    def clientConnectionFailed(self, connector, reason):
-        if self.deferred is not None:
-            d, self.deferred = self.deferred, None
-            d.errback(reason)
-
-
-
-def connect(peer, controller):
-    d = defer.Deferred()
-    from twisted.internet import reactor
-    factory = PeerClientFactory(d, peer, controller)
-    reactor.connectTCP(peer.ip, peer.port, factory)
-    print 'attempting to connect to ' + peer.ip + ':' + str(peer.port)
-    return d
-
-
+        return PeerProtocol(self, self.controller) #deferred
 
 def main():
     # errors = []
@@ -182,7 +185,7 @@ def main():
     peers = tracker_response.peers
     #this needs to be changed to update when the controller gets new peers from the tracker
     for peer in peers:
-        connect(peer, controller)
+        peer.connect(controller)
         # d.addCallbacks(data_finished, data_failed)
     # import pdb
     # pdb.set_trace()
@@ -190,8 +193,8 @@ def main():
 
     from twisted.internet import reactor
     reactor.run()
-    import pdb
-    pdb.set_trace()
+    # import pdb
+    # pdb.set_trace()
 
     
     # errors = []
