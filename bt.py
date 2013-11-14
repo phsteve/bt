@@ -75,7 +75,7 @@ class TrackerResponse(object):
         return peers
 
 class Peer(object):
-    def __init__(self, factory=None, peer_str, info_hash, peer_id=None, shook_hands_already=False, handshake=None,
+    def __init__(self, peer_str, info_hash, factory=None, peer_id=None, shook_hands_already=False, handshake=None,
                  status={'am-choking': 1,'am_interested': 0, 'peer_choking': 1, 'peer_interested':0}):
         self.ip, self.port = self.parse_peer_str(peer_str)
         self.factory = factory

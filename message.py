@@ -20,22 +20,6 @@ class Message(object):
         self.message_len = struct.unpack('!i', bytes[:4])[0]
         self.payload = self.bytes[5:self.message_len+4]
         self.remainder = self.bytes[self.message_len+4:]
-
-    @staticmethod
-    def split_message(bytes, peer_id):
-        messages = []
-        message = Message(bytes, peer_id)
-        bytes = message.remainder
-        message.remainder = ''
-        messages.append(message)
-        while bytes:
-            message = Message(bytes, peer_id)
-            bytes = message.remainder
-            message.remainder = ''
-            messages.append(message)
-        return messages
-
-
  
     @staticmethod
     def split_message(_buffer, peer_id):
@@ -50,9 +34,6 @@ class Message(object):
             messages.append(message)
             _buffer = _buffer[4+message_len:]
         return messages, _buffer
-
-
-
 
 class MessageHandler(object):
     def __init__(self):
