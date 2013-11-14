@@ -5,7 +5,7 @@ from hashlib import sha1
 from twisted.internet import defer
 from twisted.internet.protocol import Protocol, ClientFactory
 
-from message import Message, MessageHandler
+from message import Message, MessageHandler, generate_message
 
 #TODO: MessageHandler seems almost redundant, since I'm just doing everything in
 #Controller anyway...
@@ -30,6 +30,7 @@ class Controller(object):
         self.torrent = torrent
         self.info_hash = torrent.info_hash
         self.message_handler = MessageHandler()
+        
 
     def add_peer(self, peer):
         self.peer_dict[peer.peer_id] = peer
@@ -47,6 +48,9 @@ class Controller(object):
 
     def send_interested(self, peer_id):
         self.peer_dict[peer_id].protocol
+
+    def piece_handler(self, piece):
+
 
 
 
@@ -160,6 +164,9 @@ class PeerProtocol(Protocol):
             for message in messages:
                 self.controller.peer_dict[message.peer_id].messages_received.append(message)
                 self.controller.message_handler.handle(message, self.controller)
+            req = generate_message(13, 6, index=0, begin=0, length=2**14)
+            self.transport.write(req.bytes)
+            print 'sent ' + repr(req.bytes) + 'to ' + self.factory.peer.ip
             import pdb
             pdb.set_trace()
 
