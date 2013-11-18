@@ -1,11 +1,12 @@
 from bencode import bencode, bdecode
 import requests
 import struct
+import bitstring
 from hashlib import sha1
 from twisted.internet import defer
 from twisted.internet.protocol import Protocol, ClientFactory
 
-from message import Message, MessageHandler, generate_message
+from message import Message, generate_message
 
 #TODO: MessageHandler seems almost redundant, since I'm just doing everything in
 #Controller anyway...
@@ -29,8 +30,12 @@ class Controller(object):
         self.peer_dict = {}
         self.torrent = torrent
         self.info_hash = torrent.info_hash
-        self.message_handler = MessageHandler()
-        
+        self.message_handler = {'choke': self.choke_handler, 'unchoke': self.unchoke_handler, 'interested': self.interested_handler,
+                                'not interested': self.notInterested_handler, 'have': self.have_handler, 'bitfield': self.bitfield_handler,
+                                'request': self.request_handler, 'piece': self.piece_handler, 'cancel': self.cancel_handler, 'port': self.port_handler}
+
+    def handle(self, message):
+        self.message_handler[message.type](message)
 
     def add_peer(self, peer):
         self.peer_dict[peer.peer_id] = peer
@@ -46,10 +51,49 @@ class Controller(object):
     def set_peer_has_pieces_by_index(self, peer_id, index):
         self.peer_dict[peer_id].has_pieces.overwrite('0b1', index)
 
+    ##message handlers###########
+
+    def choke_handler(self, message):
+        self.set_peer_status(message.peer_id, {'peer_choking':1})
+
+    def unchoke_handler(self, message):
+        self.set_peer_status(message.peer_id, {'peer_choking':0})
+
+    def interested_handler(self, message):
+        self.set_peer_status(message.peer_id, {'peer_interested':1})
+
+    def notInterested_handler(self, message):
+        self.set_peer_status(message.peer_id, {'peer_interested':0})
+
+    def have_handler(self, message):
+        index = struct.unpack('!i', message.payload)[0]
+        self.set_peer_has_pieces_by_index(message.peer_id, index)
+
+
+    def bitfield_handler(self, message):
+        self.set_peer_has_pieces(message.peer_id, bitstring.BitArray(bytes=message.payload))
+
+    def request_handler(self, message):
+        # <len=0013><id=6><index><begin><length>
+        pass
+
+    def piece_handler(self, message):
+        # <len=0009+X><id=7><index><begin><block>
+        self.piece_handler(message.bytes[7:])
+
+    def cancel_handler(self, message):
+        pass
+
+    def port_handler(self, message):
+        pass
+
+    ##message senders#########
+
     def send_interested(self, peer_id):
         self.peer_dict[peer_id].protocol
 
     def piece_handler(self, piece):
+        pass
 
 
 
@@ -147,6 +191,8 @@ class PeerProtocol(Protocol):
                                                    peer_id=peer_id)
                     self.factory.peer.peer_id = peer_id
                     self.controller.add_peer(self.factory.peer)
+                    # import pdb
+                    # pdb.set_trace()
                     self.shook_hands = True
                     self.controller.peer_dict[peer_id].handshake = received_handshake
                     print 'handshake received: ' + received_handshake.handshake
@@ -163,12 +209,13 @@ class PeerProtocol(Protocol):
             messages, self._buffer = Message.split_message(self._buffer, peer_id)
             for message in messages:
                 self.controller.peer_dict[message.peer_id].messages_received.append(message)
-                self.controller.message_handler.handle(message, self.controller)
+                self.controller.handle(message)
+            ##hardcoding in logic
             req = generate_message(13, 6, index=0, begin=0, length=2**14)
             self.transport.write(req.bytes)
             print 'sent ' + repr(req.bytes) + 'to ' + self.factory.peer.ip
-            import pdb
-            pdb.set_trace()
+            # import pdb
+            # pdb.set_trace()
 
     def connectionLost(self, reason):
         print 'connection lost from: ' + self.factory.peer.ip
@@ -192,15 +239,15 @@ def main():
     for peer in peers:
         peer.connect(controller)
         #never gets to subsequent peers
-    import pdb
-    pdb.set_trace()
+    # import pdb
+    # pdb.set_trace()
 
 
 
     from twisted.internet import reactor
     reactor.run()
-    # import pdb
-    # pdb.set_trace()
+    import pdb
+    pdb.set_trace()
 
     
     # errors = []
