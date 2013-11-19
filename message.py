@@ -3,12 +3,13 @@ import struct
 
 # {0: 'choke', 1: 'unchoke', 2: 'interested', 3: 'not interested',
 #                          4: 'have', 5: 'bitfield', 6: 'request', 7: 'piece', 8: 'cancel', 9: 'port'}
+
+
+
 class Message(object):
 
-    def __init__(self, bytes, peer_id=None): #peer?
+    def __init__(self, bytes='', peer_id=None): #peer?
         assert len(bytes) > 3, repr(bytes)
-        message_types = {0: 'choke', 1: 'unchoke', 2: 'interested', 3: 'not interested',
-                         4: 'have', 5: 'bitfield', 6: 'request', 7: 'piece', 8: 'cancel', 9: 'port'}
         self.bytes = bytes
         self.peer_id = peer_id
         # self.peer_id = peer.peer_id
@@ -18,10 +19,9 @@ class Message(object):
             self.message_len = 0
             self.payload = ''
         else:
-            self.type = message_types[ord(self.bytes[4])]
+            self.type = digit_to_type[ord(self.bytes[4])]
             self.message_len = struct.unpack('!i', bytes[:4])[0]
             self.payload = self.bytes[5:self.message_len+4]
-            self.remainder = self.bytes[self.message_len+4:]
  
     @staticmethod
     def split_message(_buffer, peer_id):
@@ -29,23 +29,128 @@ class Message(object):
         while _buffer:
             if len(_buffer) < 4:
                 return messages, _buffer
-            message_len = struct.unpack('!i', _buffer[:4])[0]
+            message_len = struct.unpack('>i', _buffer[:4])[0]
             if len(_buffer[4:]) < message_len:
                 return messages, _buffer
-            message = Message(bytes=_buffer[0:4+message_len], peer_id=peer_id)
+
+            # message = Message(bytes=_buffer[0:4+message_len], peer_id=peer_id)
+            message = interpret_message(_buffer[0:4+message_len])
             messages.append(message)
             _buffer = _buffer[4+message_len:]
         return messages, _buffer
 
-def generate_message(message_len, type, piece_index=None, bitfield=None, index=None, begin=None, length=None, block=None):
-    if type in [0, 1, 2, 3]:
-        message_len = struct.pack('>i', 1)
-        bytes = message_len + struct.pack('B', type)
-    if type == 6:
-        message_len = struct.pack('>i', 13)
-        index = struct.pack('>i', index)
-        begin = struct.pack('>i', begin)
-        length = struct.pack('>i', length)
-        bytes = message_len + struct.pack('B', type) + index + begin + length
+class KeepAlive(Message):
+    '''<len=0000>'''
+    pass
 
-    return Message(bytes)
+class Choke(Message):
+    '''<len=0001><id=0>'''
+    def __init__(self, bytes=''):
+        if not bytes:
+            bytes = struct.pack('>i', 1) + struct.pack('b', 0)
+        super(Choke, self).__init__(bytes)
+
+class Unchoke(Message):
+    '''<len=0001><id=1>'''
+    def __init__(self, bytes=''):
+        if not bytes:
+            bytes = struct.pack('>i', 1) + struct.pack('b', 1)
+        super(Unchoke, self).__init__(bytes)
+
+class Interested(Message):
+    '''<len=0001><id=2>'''
+    def __init__(self, bytes=''):
+        if not bytes:
+            bytes = struct.pack('>i', 1) + struct.pack('b', 2)
+        super(Interested, self).__init__(bytes)
+
+class NotInterested(Message):
+    '''<len=0001><id=3>'''
+    def __init__(self, bytes=''):
+        if not bytes:
+            bytes = struct.pack('>i', 1) + struct.pack('b', 3)
+        super(NotInterested, self).__init__(bytes=bytes)
+
+class Have(Message):
+    '''<len=0005><id=4><piece index>'''
+    def __init__(self, bytes='', piece_index=''):
+        if bytes:
+            super(Have, self).__init__(bytes=bytes)
+        else:
+            self.message_len = struct.pack('>i', 5)
+            self.type = 'have'
+            self.piece_index = piece_index
+            self.bytes = self.message_len + struct.pack('b', 4) + struct.pack('>i', self.piece_index)
+
+class Bitfield(Message):
+    '''<len=0001+X><id=5><bitfield>'''
+    def __init__(kwargs):
+        pass
+
+class Request(Message):
+    '''<len=0013><id=6><index><begin><length>'''
+
+    def __init__(self, bytes='', peer_id=None, index=0, begin=0, length=0):
+        if bytes:
+            super(Request, self).__init__(bytes)
+            self.index = struct.unpack('>i', bytes[5:9])[0]
+            self.begin = struct.unpack('>i', bytes[9:13])[0]
+            self.length = struct.unpack('>i', bytes[13:17])[0]
+        else:
+            self.message_len = 13
+            self.index = index
+            self.begin = begin
+            self.length = length
+            #ugly
+            self.bytes = struct.pack('>i', self.message_len) + struct.pack('b', 6) + struct.pack('>i', self.index) + struct.pack('>i', self.begin) + struct.pack('>i', self.length)
+
+
+class Piece(Message):
+    '''<len=0009+X><id=7><index><begin><block>'''
+    def __init__(self, bytes='', peer_id=None, len_block=0, index=0, begin=0, block=''):
+        if bytes:
+            super(Piece, self).__init__(bytes)
+            self.index = struct.unpack('>i', bytes[5:9])[0]
+            self.begin = struct.unpack('>i', bytes[9:13])[0]
+            self.block = bytes[13:]
+            self.len_block = self.message_len - 9
+
+        else:
+            self.bytes = struct.pack('>i', self.len_block + 9) + struct.pack('h', 7) + struct.pack('>i', self.index) + struct.pack('>i', self.begin) + self.block
+
+class Cancel(Message):
+    '''cancel: <len=0013><id=8><index><begin><length>'''
+    pass
+
+class Port(Message):
+    '''<len=0003><id=9><listen-port>'''
+    pass
+
+digit_to_type = {0: 'choke', 1: 'unchoke', 2: 'interested', 3: 'not interested',
+                 4: 'have', 5: 'bitfield', 6: 'request', 7: 'piece', 8: 'cancel', 9: 'port',
+                 'choke': 0, 'unchoke': 1, 'interested': 2, 'not interested': 3,
+                 'have': 4, 'bitfield': 5, 'request': 6, 'piece': 7, 'cancel': 8, 'port': 9}
+
+type_to_class = {'choke': Choke, 'unchoke': Unchoke, 'interested': Interested, 'not interested': NotInterested,
+         'have': Have, 'bitfield': Bitfield, 'request': Request, 'piece': Piece, 'cancel': Cancel, 'port': Port}
+
+
+def generate_message(type, kwargs):
+    message = type_to_class[type](type, **kwargs)
+
+def interpret_message(bytes):
+    type = ord(bytes[4])
+    message = type_to_class[digit_to_type[type]](bytes=bytes) #yuck
+    return message
+
+
+
+
+
+
+
+
+
+
+
+

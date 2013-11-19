@@ -8,9 +8,6 @@ from twisted.internet.protocol import Protocol, ClientFactory
 
 from message import Message, generate_message
 
-#TODO: MessageHandler seems almost redundant, since I'm just doing everything in
-#Controller anyway...
-
 #general O-O organization feedback
 
 #error handling (peer_id/info_hash mismatches, invalid bitfields etc)
@@ -51,7 +48,8 @@ class Controller(object):
     def set_peer_has_pieces_by_index(self, peer_id, index):
         self.peer_dict[peer_id].has_pieces.overwrite('0b1', index)
 
-    ##message handlers###########
+    ##message handlers###################################
+    ## these should create messages of the correct type (Choke, Unchoke etc)
 
     def choke_handler(self, message):
         self.set_peer_status(message.peer_id, {'peer_choking':1})
@@ -206,9 +204,10 @@ class PeerProtocol(Protocol):
         else:
             peer_id = self.factory.peer.peer_id
             #message splitting
+            #this should create messages of the proper type, like Have, Interested etc, not just generic message class
             messages, self._buffer = Message.split_message(self._buffer, peer_id)
             for message in messages:
-                self.controller.peer_dict[message.peer_id].messages_received.append(message)
+                self.controller.peer_dict[message.peer_id].messages_received.append(message) #time stamp messages?
                 self.controller.handle(message)
             ##hardcoding in logic
             req = generate_message(13, 6, index=0, begin=0, length=2**14)
