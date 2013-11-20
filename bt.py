@@ -27,9 +27,12 @@ class Controller(object):
         self.peer_dict = {}
         self.torrent = torrent
         self.info_hash = torrent.info_hash
-        self.message_handler = {'choke': self.choke_handler, 'unchoke': self.unchoke_handler, 'interested': self.interested_handler,
+        self.message_handler = {'keep-alive': self.keepalive_handler, 'choke': self.choke_handler, 'unchoke': self.unchoke_handler, 'interested': self.interested_handler,
                                 'not interested': self.notInterested_handler, 'have': self.have_handler, 'bitfield': self.bitfield_handler,
                                 'request': self.request_handler, 'piece': self.piece_handler, 'cancel': self.cancel_handler, 'port': self.port_handler}
+        self.received_file = open(self.torrent.name, 'wb')
+        self.piece_status = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')
+
 
     def handle(self, message):
         self.message_handler[message.type](message)
@@ -38,9 +41,9 @@ class Controller(object):
         self.peer_dict[peer.peer_id] = peer
         # self.connect(peer)
 
-    def set_peer_status(self, peer, status_values):
+    def set_peer_status(self, peer_id, status_values):
         for key in status_values:
-            self.peer_dict[peer.peer_id].status[key] = status_values[key]
+            self.peer_dict[peer_id].status[key] = status_values[key]
 
     def set_peer_has_pieces(self, peer_id, bitstr):
         self.peer_dict[peer_id].has_pieces = bitstr
@@ -50,6 +53,9 @@ class Controller(object):
 
     ##message handlers###################################
     ## these should create messages of the correct type (Choke, Unchoke etc)
+
+    def keepalive_handler(self, message):
+        pass
 
     def choke_handler(self, message):
         self.set_peer_status(message.peer_id, {'peer_choking':1})
@@ -75,9 +81,12 @@ class Controller(object):
         # <len=0013><id=6><index><begin><length>
         pass
 
-    def piece_handler(self, message):
+    def piece_handler(self, piece):
         # <len=0009+X><id=7><index><begin><block>
-        self.piece_handler(message.bytes[7:])
+        self.received_file.seek(self.torrent.piece_length * piece.index + piece.begin)
+        self.received_file.write(piece.block)
+        self.piece_status.overwrite('0b1', piece.index)
+
 
     def cancel_handler(self, message):
         pass
@@ -86,15 +95,11 @@ class Controller(object):
         pass
 
     ##message senders#########
+    def get_next_request(self):
+        return self.piece_status.bin.find('0')
 
     def send_interested(self, peer_id):
         self.peer_dict[peer_id].protocol
-
-    def piece_handler(self, piece):
-        pass
-
-
-
 
 class TorrentFile(object):
     def __init__(self, filepath):
@@ -102,6 +107,11 @@ class TorrentFile(object):
         self.decoded = bdecode(self.f)
         self.announce_url = self.decoded['announce']
         self.info_hash = sha1(bencode(self.decoded['info'])).digest()
+        self.info = self.decoded['info']
+        self.piece_length = self.info['piece length']
+        self.name = self.info['name']
+        self.pieces = self.info['pieces']
+        self.num_pieces = len(self.pieces)/20
 
 class TrackerResponse(object):
     def __init__(self, torrent):
@@ -181,7 +191,7 @@ class PeerProtocol(Protocol):
                     pstr = bytes[1:20]
                     reserved = bytes[20:28]
                     info_hash = bytes[28:48]
-                    peer_id = bytes[48:]
+                    peer_id = bytes[48:68]
                     # implement peer_id/info_hash checking
                     # else:
                         #need to check if peer already shook hands
@@ -203,16 +213,28 @@ class PeerProtocol(Protocol):
 
         else:
             peer_id = self.factory.peer.peer_id
-            #message splitting
-            #this should create messages of the proper type, like Have, Interested etc, not just generic message class
             messages, self._buffer = Message.split_message(self._buffer, peer_id)
+            # import pdb
+            # pdb.set_trace()
             for message in messages:
-                self.controller.peer_dict[message.peer_id].messages_received.append(message) #time stamp messages?
+                self.controller.peer_dict[peer_id].messages_received.append(message) #time stamp messages?
                 self.controller.handle(message)
-            ##hardcoding in logic
-            req = generate_message(13, 6, index=0, begin=0, length=2**14)
+            # if not self.controller.peer_dict[peer_id].status['interested']:
+            inter = generate_message('interested')
+            self.transport.write(inter.bytes)
+                # self.controller.peer_dict[peer_id].status['interested'] = 1
+            next = self.controller.get_next_request()
+            req = generate_message('request', index=next, begin=0, length=2**14)
             self.transport.write(req.bytes)
+            # import pdb
+            # pdb.set_trace()
+            # ##hardcoding in logic
+            # interest = generate_message('interested')
+            # self.transport.write(interest.bytes)
+            # req = generate_message('request', index=0, begin=0, length=2**14)
+            # self.transport.write(req.bytes)
             print 'sent ' + repr(req.bytes) + 'to ' + self.factory.peer.ip
+
             # import pdb
             # pdb.set_trace()
 
@@ -245,12 +267,13 @@ def main():
 
     from twisted.internet import reactor
     reactor.run()
-    import pdb
-    pdb.set_trace()
+    # import pdb
+    # pdb.set_trace()
 
     
     # errors = []
 
-main()
+if __name__ == '__main__':
+    main()
 
 
