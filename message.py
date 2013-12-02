@@ -8,7 +8,7 @@ import struct
 
 class Message(object):
 
-    def __init__(self, bytes='', peer_id=None):
+    def __init__(self, bytes='', peer_id=''):
         assert len(bytes) > 3, repr(bytes)
         self.bytes = bytes
         self.peer_id = peer_id
@@ -43,14 +43,14 @@ class Message(object):
 
 class KeepAlive(Message):
     '''<len=0000>'''
-    def __init__(self, bytes=''):
+    def __init__(self, bytes='', peer_id=''):
         if not bytes:
             bytes = struct.pack('>i', 0)
         super(KeepAlive, self).__init__(bytes=bytes)
 
 class Choke(Message):
     '''<len=0001><id=0>'''
-    def __init__(self, bytes='', peer_id=None):
+    def __init__(self, bytes='', peer_id=''):
         if not bytes:
             bytes = struct.pack('>i', 1) + struct.pack('b', 0)
 
@@ -58,28 +58,28 @@ class Choke(Message):
 
 class Unchoke(Message):
     '''<len=0001><id=1>'''
-    def __init__(self, bytes='', peer_id=None):
+    def __init__(self, bytes='', peer_id=''):
         if not bytes:
             bytes = struct.pack('>i', 1) + struct.pack('b', 1)
         super(Unchoke, self).__init__(bytes=bytes, peer_id=peer_id)
 
 class Interested(Message):
     '''<len=0001><id=2>'''
-    def __init__(self, bytes='', peer_id=None):
+    def __init__(self, bytes='', peer_id=''):
         if not bytes:
             bytes = struct.pack('>i', 1) + struct.pack('b', 2)
         super(Interested, self).__init__(bytes=bytes, peer_id=peer_id)
 
 class NotInterested(Message):
     '''<len=0001><id=3>'''
-    def __init__(self, bytes='', peer_id=None):
+    def __init__(self, bytes='', peer_id=''):
         if not bytes:
             bytes = struct.pack('>i', 1) + struct.pack('b', 3)
         super(NotInterested, self).__init__(bytes=bytes)
 
 class Have(Message):
     '''<len=0005><id=4><piece index>'''
-    def __init__(self, bytes='', piece_index='', peer_id=None):
+    def __init__(self, bytes='', piece_index='', peer_id=''):
         if bytes:
             self.bytes = bytes
         if not bytes:
@@ -92,50 +92,56 @@ class Have(Message):
 
 class Bitfield(Message):
     '''<len=0001+X><id=5><bitfield>'''
-    def __init__(self, bytes='', bitfield_len=0, bitfield='', peer_id=None):
+    def __init__(self, bytes='', bitfield_len=0, bitfield='', peer_id=''):
         if bytes:
-            super(Bitfield, self).__init__(bytes=bytes, peer_id=peer_id)
             self.bitfield_len = struct.unpack('>i', bytes[:4])[0] - 1
+            super(Bitfield, self).__init__(bytes=bytes, peer_id=peer_id)
             self.bitfield = bitstring.BitArray(bytes=self.payload)
         else:
             self.bitfield_len = bitfield_len
             self.message_len = struct.pack('>i', 1 + bitfield_len)
-            self.type = 'bitfield'
+            # self.type = 'bitfield'
             self.bitfield = bitfield
             self.bytes = self.message_len + struct.pack('b', 5) + struct.pack('s', self.bitfield)
+            super(Bitfield, self).__init__(bytes=bytes, peer_id=peer_id)
+
             #self.bytes may be wrong
 
 class Request(Message):
     '''<len=0013><id=6><index><begin><length>'''
 
-    def __init__(self, bytes='', peer_id=None, **kwargs):
+    def __init__(self, bytes='', peer_id='', index=0, begin=0, length=0):
         if bytes:
             self.index = struct.unpack('>i', bytes[5:9])[0]
             self.begin = struct.unpack('>i', bytes[9:13])[0]
             self.length = struct.unpack('>i', bytes[13:17])[0]
+            self.peer_id = peer_id
         else:
             self.message_len = 13
-            self.index = kwargs['index']
-            self.begin = kwargs['begin']
-            self.length = kwargs['length']
-            #ugly
-            self.bytes = struct.pack('>i', self.message_len) + struct.pack('b', 6) + struct.pack('>i', self.index) + struct.pack('>i', self.begin) + struct.pack('>i', self.length)
-        super(Request, self).__init__(self.bytes, peer_id=peer_id)
+            self.index = index
+            self.begin = begin
+            self.length = length
+            self.bytes = ''.join([struct.pack('>i', self.message_len), struct.pack('b', 6), struct.pack('>i', self.index), struct.pack('>i', self.begin), struct.pack('>i', self.length)])
+        super(Request, self).__init__(bytes=self.bytes, peer_id=peer_id)
 
 
 class Piece(Message):
     '''<len=0009+X><id=7><index><begin><block>'''
-    def __init__(self, bytes='', peer_id=None, len_block=0, index=0, begin=0, block=''):
+    def __init__(self, bytes='', peer_id='', index=0, begin=0, block=''):
         if bytes:
             self.bytes = bytes
-            super(Piece, self).__init__(self.bytes, peer_id)
             self.index = struct.unpack('>i', bytes[5:9])[0]
             self.begin = struct.unpack('>i', bytes[9:13])[0]
             self.block = bytes[13:]
-            self.len_block = self.message_len - 9
-
+            self.block_len = len(self.block)
+            self.peer_id = peer_id
         else:
-            self.bytes = struct.pack('>i', self.len_block + 9) + struct.pack('h', 7) + struct.pack('>i', self.index) + struct.pack('>i', self.begin) + self.block
+            self.block_len = len(block)
+            self.index = index
+            self.begin = begin
+            self.block = block
+            self.bytes = ''.join([struct.pack('>i', 9 + self.block_len), struct.pack('h', 7), struct.pack('>i', self.index), struct.pack('>i', self.begin), self.block])
+        super(Piece, self).__init__(bytes=self.bytes, peer_id=peer_id)
 
 class Cancel(Message):
     '''cancel: <len=0013><id=8><index><begin><length>'''
