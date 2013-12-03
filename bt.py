@@ -87,6 +87,7 @@ class Controller(object):
         self.piece_status.overwrite('0b1', piece.index)
         # print self.piece_status.bin
         if '0' not in self.piece_status.bin[:self.torrent.num_pieces-1]:
+            print 'Done!'
             from twisted.internet import reactor
             reactor.stop()
 
@@ -251,7 +252,8 @@ class PeerProtocol(Protocol):
 
 
     def connectionLost(self, reason):
-        # print 'connection lost from: ' + self.factory.peer.ip
+        print 'connection lost from: ' + self.factory.peer.ip
+
 
 class PeerClientFactory(ClientFactory):
     protocol = PeerProtocol
@@ -264,7 +266,11 @@ class PeerClientFactory(ClientFactory):
         return PeerProtocol(self, self.controller)
 
 def main():
-    torrent = TorrentFile('torrents/flagfromserver.torrent')
+    try:
+        filepath = sys.argv[1]
+        torrent = TorrentFile(filepath)
+    except:
+        sys.exit('Please enter a valid file path to a torrent')
     received_file = open(torrent.name, 'wb')
     controller = Controller(torrent, received_file)
     tracker_response = TrackerResponse(torrent)
