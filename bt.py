@@ -101,20 +101,6 @@ class Controller(object):
     def get_next_piece(self):
         if '0' in self.pieces_requested.bin[:self.torrent.num_pieces]:
             return self.pieces_requested.bin.find('0')
-        #     next = self.controller.get_next_request()
-        #     req = generate_message('request', index=next, begin=0, length=2**14)
-        #     # import pdb
-        #     # pdb.set_trace()
-        #     self.transport.write(req.bytes)
-        #     self.controller.pieces_requested.overwrite('0b1', next)
-        #     print 'sent a request for piece # ' + str(req.index) + ' to ' + peer_id
-        
-        # if '0' in self.pieces_requested.bin:
-        #     next = self.pieces_requested.bin.find('0')
-        #     req = generate_message('request', index=next, begin=0, length=2**14)
-        #     self.peer_dict[peer_id].factory.
-        # else:
-        #     pass
 
     def send_control_message(self, type, peer_id):
         # sends a message (either choke, unchoke, interested, or not interested) to a peer
