@@ -3,6 +3,7 @@
 A BitTorrent client written in Python using Twisted. I found the [unofficial spec](https://wiki.theory.org/BitTorrentSpecification) and this [blog post](http://www.kristenwidman.com/blog/how-to-write-a-bittorrent-client-part-1/) incredibly useful. Official spec is [here](http://bittorrent.org/beps/bep_0003.html).
 
 ###How to use
+* Devoloped on Python 2.7.5
 * `pip install -r requirements.txt`
 * `python bt.py path/to/torrent.torrent`
 
