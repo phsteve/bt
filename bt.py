@@ -80,12 +80,12 @@ class Controller(object):
 
     def piece_handler(self, piece):
         # <len=0009+X><id=7><index><begin><block>
-        print "received piece # %s from %s" %(piece.index, self.peer_dict[piece.peer_id].ip)
+        # print "received piece # %s from %s" %(piece.index, self.peer_dict[piece.peer_id].ip)
         self.received_file.seek(piece.block_len * piece.index + piece.begin)
         self.received_file.write(piece.block)
         # self.data_list[piece.index] = piece.block
         self.piece_status.overwrite('0b1', piece.index)
-        print self.piece_status.bin
+        # print self.piece_status.bin
         if '0' not in self.piece_status.bin[:self.torrent.num_pieces-1]:
             from twisted.internet import reactor
             reactor.stop()
@@ -160,7 +160,7 @@ class Peer(object):
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
         reactor.connectTCP(self.ip, self.port, self.factory)
-        print 'attempting to connect to ' + self.ip + ':' + str(self.port)
+        # print 'attempting to connect to ' + self.ip + ':' + str(self.port)
 
 class Handshake(object):
     # should this inherit from Message?
@@ -184,7 +184,7 @@ class PeerProtocol(Protocol):
 
 
     def connectionMade(self):
-        print 'connection made to ' + self.factory.peer.ip
+        # print 'connection made to ' + self.factory.peer.ip
         # import pdb
         # pdb.set_trace()
         sent_handshake = Handshake(self.controller.info_hash).handshake
@@ -208,10 +208,10 @@ class PeerProtocol(Protocol):
         self.controller.add_peer(self.factory.peer)
         self.shook_hands = True
         self.controller.peer_dict[peer_id].handshake = received_handshake
-        print 'handshake received: ' + received_handshake.handshake
+        # print 'handshake received: ' + received_handshake.handshake
     
         inter = generate_message('interested')
-        print 'sent an interested to %r' %(self.transport.getPeer())
+        # print 'sent an interested to %r' %(self.transport.getPeer())
         self.transport.write(inter.bytes)
         self.controller.peer_dict[peer_id].status['am_interested'] = 1
         buff = buff[68:]
@@ -246,12 +246,12 @@ class PeerProtocol(Protocol):
             if next is not None:
                 req = generate_message('request', index=next, begin=0, length=2**14)
                 self.transport.write(req.bytes)
-                print 'sent req for index %r to %r' %(str(req.index), self.transport.getPeer())
+                # print 'sent req for index %r to %r' %(str(req.index), self.transport.getPeer())
                 self.controller.pieces_requested.overwrite('0b1', next)
 
 
     def connectionLost(self, reason):
-        print 'connection lost from: ' + self.factory.peer.ip
+        # print 'connection lost from: ' + self.factory.peer.ip
 
 class PeerClientFactory(ClientFactory):
     protocol = PeerProtocol
