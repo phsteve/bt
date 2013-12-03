@@ -3,16 +3,14 @@ import requests
 import struct
 import bitstring
 from hashlib import sha1
-from twisted.internet import defer
 from twisted.internet.protocol import Protocol, ClientFactory
+import sys
 
 from message import Message, generate_message
 
 #general O-O organization feedback
 
 #error handling (peer_id/info_hash mismatches, invalid bitfields etc)
-
-#what should i do about testing?
 
 MY_PEER_ID = '-SK0001-asdfasdfasdf'
 
@@ -25,6 +23,7 @@ class Controller(object):
                                 'not interested': self.notInterested_handler, 'have': self.have_handler, 'bitfield': self.bitfield_handler,
                                 'request': self.request_handler, 'piece': self.piece_handler, 'cancel': self.cancel_handler, 'port': self.port_handler}
         self.received_file = received_file
+        # self.data_list = ['' for _ in xrange(self.torrent.num_pieces)]
         self.piece_status = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')
         self.pieces_requested = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')#{piece_index: [done?, [(begin, end) for each chunk received]]}
 
@@ -59,6 +58,7 @@ class Controller(object):
 
     def interested_handler(self, message):
         self.set_peer_status(message.peer_id, {'peer_interested':1})
+        self.send_control_message('unchoke')
 
     def notInterested_handler(self, message):
         self.set_peer_status(message.peer_id, {'peer_interested':0})
@@ -71,18 +71,24 @@ class Controller(object):
     def bitfield_handler(self, message):
         self.set_peer_has_pieces(message.peer_id, bitstring.BitArray(bytes=message.payload))
 
-    def request_handler(self, message):
+    def request_handler(self, req):
         # <len=0013><id=6><index><begin><length>
-        pass
+        self.received_file.seek(self.torrent.piece_length * req.index + req.begin)
+        piece = generate_message('piece', index=req.index, begin=req.begin, block=self.received_file.read(req.length))
+        self.peer_dict[req.peer_id].factory.transport.write(piece.bytes)
+        
 
     def piece_handler(self, piece):
         # <len=0009+X><id=7><index><begin><block>
+        print "received piece # %s from %s" %(piece.index, self.peer_dict[piece.peer_id].ip)
         self.received_file.seek(piece.block_len * piece.index + piece.begin)
         self.received_file.write(piece.block)
+        # self.data_list[piece.index] = piece.block
         self.piece_status.overwrite('0b1', piece.index)
-        # if '0' not in self.piece_status.bin[:self.torrent.num_pieces]:
-        #     print 'Done!'
-
+        print self.piece_status.bin
+        if '0' not in self.piece_status.bin[:self.torrent.num_pieces-1]:
+            from twisted.internet import reactor
+            reactor.stop()
 
 
     def cancel_handler(self, message):
@@ -110,8 +116,10 @@ class Controller(object):
         # else:
         #     pass
 
-    def send_interested(self, peer_id):
-        self.peer_dict[peer_id].protocol
+    def send_control_message(self, type, peer_id):
+        # sends a message (either choke, unchoke, interested, or not interested) to a peer
+        msg = generate_message(type, peer_id=peer_id)
+        self.peer_dict[peer_id].factory.transport.write(msg.bytes)
 
 class TorrentFile(object):
     def __init__(self, filepath):
@@ -187,6 +195,8 @@ class PeerProtocol(Protocol):
         self._buffer = ''
         # self.deferred = deferred
 
+
+
     def connectionMade(self):
         print 'connection made to ' + self.factory.peer.ip
         # import pdb
@@ -194,31 +204,45 @@ class PeerProtocol(Protocol):
         sent_handshake = Handshake(self.controller.info_hash).handshake
         self.transport.write(sent_handshake)
 
+    def is_handshake(self, bytes):
+        if bytes[1:20] == 'BitTorrent protocol':
+            return True
+
+    def handle_handshake(self, bytes, messages, buff):
+        pstr = bytes[1:20]
+        reserved = bytes[20:28]
+        info_hash = bytes[28:48]
+        peer_id = bytes[48:68]
+        # implement peer_id/info_hash checking
+        # else:
+            #need to check if peer already shook hands
+        received_handshake = Handshake(info_hash, pstr=pstr, reserved=reserved,
+                                       peer_id=peer_id)
+        self.factory.peer.peer_id = peer_id
+        self.controller.add_peer(self.factory.peer)
+        self.shook_hands = True
+        self.controller.peer_dict[peer_id].handshake = received_handshake
+        print 'handshake received: ' + received_handshake.handshake
+    
+        inter = generate_message('interested')
+        print 'sent an interested to %r' %(self.transport.getPeer())
+        self.transport.write(inter.bytes)
+        self.controller.peer_dict[peer_id].status['am_interested'] = 1
+        buff = buff[68:]
+        messages, buff = Message.split_message(buff, peer_id)
+        return messages, buff
+        
+
     def dataReceived(self, bytes):
         messages = []
         self._buffer += bytes
         # print 'bytes received: ' + repr(bytes)
         if not self.shook_hands:
             if len(self._buffer) >= 68:
-                if bytes[1:20] == 'BitTorrent protocol':
-                    pstr = bytes[1:20]
-                    reserved = bytes[20:28]
-                    info_hash = bytes[28:48]
-                    peer_id = bytes[48:68]
-                    # implement peer_id/info_hash checking
-                    # else:
-                        #need to check if peer already shook hands
-                    received_handshake = Handshake(info_hash, pstr=pstr, reserved=reserved,
-                                                   peer_id=peer_id)
-                    self.factory.peer.peer_id = peer_id
-                    self.controller.add_peer(self.factory.peer)
-                    # import pdb
-                    # pdb.set_trace()
-                    self.shook_hands = True
-                    self.controller.peer_dict[peer_id].handshake = received_handshake
-                    print 'handshake received: ' + received_handshake.handshake
-                    self._buffer = self._buffer[68:]
-                    messages, self._buffer = Message.split_message(self._buffer, peer_id)
+                if self.is_handshake(bytes):
+                    messages, self._buffer = self.handle_handshake(bytes, messages, self._buffer)
+
+
             #check if peer_id and info_hash are correct
             #if they're not, disconnect
 
@@ -226,21 +250,17 @@ class PeerProtocol(Protocol):
             peer_id = self.factory.peer.peer_id
             messages, self._buffer = Message.split_message(self._buffer, peer_id)
             for message in messages:
-                print 'len of messages is: %d' %len(messages)
-                print 'received a %s from %s' %(message.type, peer_id)
+                # print 'len of messages is: %d' %len(messages)
+                # print 'received a %s from %s' %(message.type, peer_id)
                 self.controller.peer_dict[peer_id].messages_received.append(message) #time stamp messages?
                 self.controller.handle(message)
-            if not self.controller.peer_dict[peer_id].status['am_interested']:
-                inter = generate_message('interested')
-                print 'sent an interested to ' + peer_id
-                self.transport.write(inter.bytes)
-                self.controller.peer_dict[peer_id].status['am_interested'] = 1
+
             next = self.controller.get_next_piece()
 
             if next is not None:
                 req = generate_message('request', index=next, begin=0, length=2**14)
                 self.transport.write(req.bytes)
-                print 'sent req for index %s to %s' %(str(req.index), peer_id)
+                print 'sent req for index %r to %r' %(str(req.index), self.transport.getPeer())
                 self.controller.pieces_requested.overwrite('0b1', next)
 
 
@@ -266,19 +286,11 @@ def main():
     #this needs to be changed to update when the controller gets new peers from the tracker
     for peer in peers:
         peer.connect(controller)
-        #never gets to subsequent peers
-    # import pdb
-    # pdb.set_trace()
-
-
+        
 
     from twisted.internet import reactor
     reactor.run()
-    # import pdb
-    # pdb.set_trace()
 
-    
-    # errors = []
 
 if __name__ == '__main__':
     main()
