@@ -24,7 +24,8 @@ class Controller(object):
                                 'request': self.request_handler, 'piece': self.piece_handler, 'cancel': self.cancel_handler, 'port': self.port_handler}
         self.received_file = received_file
         # self.data_list = ['' for _ in xrange(self.torrent.num_pieces)]
-        self.piece_status = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')
+        self.completed_piece_status = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')
+        self.partial_piece_status = [] #List of lists, each sublist is the beginning and end of 
         self.pieces_requested = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')#{piece_index: [done?, [(begin, end) for each chunk received]]}
 
 
@@ -81,12 +82,13 @@ class Controller(object):
     def piece_handler(self, piece):
         # <len=0009+X><id=7><index><begin><block>
         # print "received piece # %s from %s" %(piece.index, self.peer_dict[piece.peer_id].ip)
+        #Need to implement hash checking, saving partial pieces to memory first
         self.received_file.seek(piece.block_len * piece.index + piece.begin)
         self.received_file.write(piece.block)
         # self.data_list[piece.index] = piece.block
-        self.piece_status.overwrite('0b1', piece.index)
-        # print self.piece_status.bin
-        if '0' not in self.piece_status.bin[:self.torrent.num_pieces-1]:
+        self.completed_piece_status.overwrite('0b1', piece.index)
+        print self.completed_piece_status.bin
+        if '0' not in self.completed_piece_status.bin[:self.torrent.num_pieces-1]:
             print 'Done!'
             from twisted.internet import reactor
             reactor.stop()
@@ -142,8 +144,6 @@ class Peer(object):
                  status={'am_choking': 1,'am_interested': 0, 'peer_choking': 1, 'peer_interested':0}):
         self.ip, self.port = self.parse_peer_str(peer_str)
         self.factory = factory
-
-        #probably kill this
         self.info_hash = info_hash
         self.peer_id = peer_id
         self.handshake = handshake
@@ -161,7 +161,7 @@ class Peer(object):
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
         reactor.connectTCP(self.ip, self.port, self.factory)
-        # print 'attempting to connect to ' + self.ip + ':' + str(self.port)
+        print 'attempting to connect to ' + self.ip + ':' + str(self.port)
 
 class Handshake(object):
     # should this inherit from Message?
@@ -185,7 +185,7 @@ class PeerProtocol(Protocol):
 
 
     def connectionMade(self):
-        # print 'connection made to ' + self.factory.peer.ip
+        print 'connection made to ' + self.factory.peer.ip
         # import pdb
         # pdb.set_trace()
         sent_handshake = Handshake(self.controller.info_hash).handshake
@@ -209,10 +209,10 @@ class PeerProtocol(Protocol):
         self.controller.add_peer(self.factory.peer)
         self.shook_hands = True
         self.controller.peer_dict[peer_id].handshake = received_handshake
-        # print 'handshake received: ' + received_handshake.handshake
+        print 'handshake received: ' + received_handshake.handshake
     
         inter = generate_message('interested')
-        # print 'sent an interested to %r' %(self.transport.getPeer())
+        print 'sent an interested to %r' %(self.transport.getPeer())
         self.transport.write(inter.bytes)
         self.controller.peer_dict[peer_id].status['am_interested'] = 1
         buff = buff[68:]
@@ -264,6 +264,9 @@ class PeerClientFactory(ClientFactory):
 
     def buildProtocol(self, addr):
         return PeerProtocol(self, self.controller)
+
+    def clientConnectionFailed(self, connector, reason):
+        print 'Failed: ', reason
 
 def main():
     try:
