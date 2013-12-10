@@ -17,10 +17,10 @@ def install():
 def torrentfile(torrentfile):
     """What to do with the local torrent file"""
     #This version copies the torrent file to the ubuntu home directy
-    put(os.path.basename(torrentfile), 'torrents/test.torrent')
+    put(os.path.basename(torrentfile), 'test.torrent')
 
 def download():
     """Code to download """
     # after the torrent file
     with cd('bt'):
-        run('time python bt.py torrents/test.torrent')
+        run('time python bt.py ../test.torrent')

@@ -28,7 +28,6 @@ class Controller(object):
         self.partial_piece_status = [] #List of lists, each sublist is the beginning and end of 
         self.pieces_requested = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')#{piece_index: [done?, [(begin, end) for each chunk received]]}
 
-
     def handle(self, message):
         self.message_handler[message.type](message)
 
@@ -83,6 +82,7 @@ class Controller(object):
         # <len=0009+X><id=7><index><begin><block>
         # print "received piece # %s from %s" %(piece.index, self.peer_dict[piece.peer_id].ip)
         #Need to implement hash checking, saving partial pieces to memory first
+        self.check_hash(piece)
         self.received_file.seek(piece.block_len * piece.index + piece.begin)
         self.received_file.write(piece.block)
         # self.data_list[piece.index] = piece.block
@@ -100,6 +100,19 @@ class Controller(object):
     def port_handler(self, message):
         pass
 
+    def check_hash(self, piece):
+        # print self.torrent.piece_hashes[piece.index]
+        expected = struct.unpack('20s', self.torrent.piece_hashes[piece.index])[0]
+        got = sha1(piece.block).digest()
+        # import pdb
+        # pdb.set_trace()
+        if expected != got:
+            print 'received a bad piece!'
+            print 'expected ', expected
+            print 'got ', got
+        else:
+            print 'piece checked OK'
+
     ##message senders#########
     def get_next_piece(self):
         if '0' in self.pieces_requested.bin[:self.torrent.num_pieces]:
@@ -114,13 +127,14 @@ class TorrentFile(object):
     def __init__(self, filepath):
         self.f = open(filepath, 'rb').read()
         self.decoded = bdecode(self.f)
-        self.announce_url = self.decoded['announce']
-        self.info_hash = sha1(bencode(self.decoded['info'])).digest()
         self.info = self.decoded['info']
-        self.piece_length = self.info['piece length']
-        self.name = self.info['name']
         self.pieces = self.info['pieces']
         self.num_pieces = len(self.pieces)/20
+        self.announce_url = self.decoded['announce']
+        self.info_hash = sha1(bencode(self.decoded['info'])).digest()
+        self.piece_hashes = [self.pieces[i:20+i] for i in range(0, len(self.pieces), 20)]
+        self.piece_length = self.info['piece length']
+        self.name = self.info['name']
 
 class TrackerResponse(object):
     def __init__(self, torrent):
