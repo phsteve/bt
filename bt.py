@@ -8,8 +8,6 @@ import sys
 
 from message import Message, generate_message
 
-#general O-O organization feedback
-
 #error handling (peer_id/info_hash mismatches, invalid bitfields etc)
 
 MY_PEER_ID = '-SK0001-asdfasdfasdf'
@@ -24,9 +22,13 @@ class Controller(object):
                                 'request': self.request_handler, 'piece': self.piece_handler, 'cancel': self.cancel_handler, 'port': self.port_handler}
         self.received_file = received_file
         # self.data_list = ['' for _ in xrange(self.torrent.num_pieces)]
-        self.completed_piece_status = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')
-        self.partial_piece_status = [] #List of lists, each sublist is the beginning and end of 
+        self.big_pieces = self.torrent.piece_length > 2**14 #flag for handling pieces longer than 2**14
+        self.piece_ratio = self.torrent.piece_length / 2**14
         self.pieces_requested = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')#{piece_index: [done?, [(begin, end) for each chunk received]]}
+        self.completed_piece_status = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')
+        self.blocks_requested = [bitstring.BitArray('0b' + self.piece_ratio * '0') for _ in xrange(self.torrent.num_pieces)]
+        self.blocks_completed = [bitstring.BitArray('0b' + self.piece_ratio * '0') for _ in xrange(self.torrent.num_pieces)] #List of bitfields, each sublist is the beginning and end of 
+        self.block_buffer = [[] for _ in xrange(self.torrent.num_pieces)]
 
     def handle(self, message):
         self.message_handler[message.type](message)
@@ -82,12 +84,19 @@ class Controller(object):
         # <len=0009+X><id=7><index><begin><block>
         # print "received piece # %s from %s" %(piece.index, self.peer_dict[piece.peer_id].ip)
         #Need to implement hash checking, saving partial pieces to memory first
-        self.check_hash(piece)
-        self.received_file.seek(piece.block_len * piece.index + piece.begin)
-        self.received_file.write(piece.block)
+        if self.big_pieces:
+            self.blocks_completed[piece.index].overwrite('0b1', piece.begin/(2**14))
+            # self.block_buffer[piece.index].append(piece)
+            if self.blocks_completed[piece.index].bin == '1'*self.piece_ratio:
+            #     to_write = ''.join(self.block_buffer[piece.index])
+            #     self.check_hash(piece.index)
+                self.completed_piece_status.overwrite('0b1', piece.index)
+            self.received_file.seek(piece.block_len * piece.index + piece.begin)
+
+            self.received_file.write(piece.block)
         # self.data_list[piece.index] = piece.block
-        self.completed_piece_status.overwrite('0b1', piece.index)
-        print self.completed_piece_status.bin
+        # print self.completed_piece_status.bin
+        # print [_.bin for _ in self.blocks_completed]
         if '0' not in self.completed_piece_status.bin[:self.torrent.num_pieces-1]:
             print 'Done!'
             from twisted.internet import reactor
@@ -100,23 +109,30 @@ class Controller(object):
     def port_handler(self, message):
         pass
 
-    def check_hash(self, piece):
+    def check_hash(self, bytes, index):
         # print self.torrent.piece_hashes[piece.index]
-        expected = struct.unpack('20s', self.torrent.piece_hashes[piece.index])[0]
-        got = sha1(piece.block).digest()
+        expected = struct.unpack('20s', self.torrent.piece_hashes[index])[0]
+        got = sha1(bytes).digest()
         # import pdb
         # pdb.set_trace()
         if expected != got:
             print 'received a bad piece!'
             print 'expected ', expected
             print 'got ', got
+            # self.peer_dict[piece.peer_id]
         else:
             print 'piece checked OK'
 
     ##message senders#########
-    def get_next_piece(self):
-        if '0' in self.pieces_requested.bin[:self.torrent.num_pieces]:
-            return self.pieces_requested.bin.find('0')
+    def get_next_block(self):
+        index = self.pieces_requested.bin.find('0')
+        begin = self.blocks_requested[index].bin.find('0') * 2**14
+        print self.pieces_requested.bin
+        print self.blocks_requested[index].bin
+        # if '0' in self.pieces_requested.bin[:self.torrent.num_pieces]:
+        print 'index = %s'%index
+        print 'begin = %s'%begin
+        return index, begin
 
     def send_control_message(self, type, peer_id):
         # sends a message (either choke, unchoke, interested, or not interested) to a peer
@@ -174,7 +190,7 @@ class Peer(object):
     def connect(self, controller):
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
-        reactor.connectTCP(self.ip, self.port, self.factory)
+        reactor.connectTCP('54.209.151.119', 59770, self.factory)
         print 'attempting to connect to ' + self.ip + ':' + str(self.port)
 
 class Handshake(object):
@@ -256,13 +272,15 @@ class PeerProtocol(Protocol):
                 self.controller.peer_dict[peer_id].messages_received.append(message) #time stamp messages?
                 self.controller.handle(message)
 
-            next = self.controller.get_next_piece()
+            index, begin = self.controller.get_next_block()
 
-            if next is not None:
-                req = generate_message('request', index=next, begin=0, length=2**14)
+            if index is not None:
+                req = generate_message('request', index=index, begin=begin, length=2**14)
                 self.transport.write(req.bytes)
                 # print 'sent req for index %r to %r' %(str(req.index), self.transport.getPeer())
-                self.controller.pieces_requested.overwrite('0b1', next)
+                self.controller.blocks_requested[index].overwrite('0b1', begin/(2**14))
+                if '0' not in self.controller.blocks_requested[index].bin:
+                    self.controller.pieces_requested.overwrite('0b1', index)
 
 
     def connectionLost(self, reason):
@@ -286,6 +304,8 @@ def main():
     try:
         filepath = sys.argv[1]
         torrent = TorrentFile(filepath)
+        # import pdb
+        # pdb.set_trace()
     except:
         sys.exit('Please enter a valid file path to a torrent')
     received_file = open(torrent.name, 'wb')
