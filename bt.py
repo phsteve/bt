@@ -23,9 +23,9 @@ class Controller(object):
         self.received_file = received_file
         # self.data_list = ['' for _ in xrange(self.torrent.num_pieces)]
         self.big_pieces = self.torrent.piece_length > 2**14 #flag for handling pieces longer than 2**14
-        self.piece_ratio = self.torrent.piece_length / 2**14
+        self.piece_ratio = (self.torrent.piece_length - 1) / 2**14 + 1
         self.pieces_requested = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')#{piece_index: [done?, [(begin, end) for each chunk received]]}
-        self.completed_piece_status = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')
+        self.pieces_completed = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')
         self.blocks_requested = [bitstring.BitArray('0b' + self.piece_ratio * '0') for _ in xrange(self.torrent.num_pieces)]
         self.blocks_completed = [bitstring.BitArray('0b' + self.piece_ratio * '0') for _ in xrange(self.torrent.num_pieces)] #List of bitfields, each sublist is the beginning and end of 
         self.block_buffer = [[] for _ in xrange(self.torrent.num_pieces)]
@@ -82,7 +82,7 @@ class Controller(object):
 
     def piece_handler(self, piece):
         # <len=0009+X><id=7><index><begin><block>
-        # print "received piece # %s from %s" %(piece.index, self.peer_dict[piece.peer_id].ip)
+        print "received piece #%s begin @ %s from %s" %(piece.index, piece.begin, self.peer_dict[piece.peer_id].ip)
         #Need to implement hash checking, saving partial pieces to memory first
         if self.big_pieces:
             self.blocks_completed[piece.index].overwrite('0b1', piece.begin/(2**14))
@@ -90,14 +90,15 @@ class Controller(object):
             if self.blocks_completed[piece.index].bin == '1'*self.piece_ratio:
             #     to_write = ''.join(self.block_buffer[piece.index])
             #     self.check_hash(piece.index)
-                self.completed_piece_status.overwrite('0b1', piece.index)
-            self.received_file.seek(piece.block_len * piece.index + piece.begin)
+                print 'Finished downloading piece #%d' %piece.index
+                self.pieces_completed.overwrite('0b1', piece.index)
+            self.received_file.seek(self.torrent.piece_length * piece.index + piece.begin)
 
             self.received_file.write(piece.block)
         # self.data_list[piece.index] = piece.block
-        # print self.completed_piece_status.bin
+        # print self.pieces_completed.bin
         # print [_.bin for _ in self.blocks_completed]
-        if '0' not in self.completed_piece_status.bin[:self.torrent.num_pieces-1]:
+        if '0' not in self.pieces_completed.bin[:self.torrent.num_pieces-1]:
             print 'Done!'
             from twisted.internet import reactor
             reactor.stop()
@@ -119,6 +120,7 @@ class Controller(object):
             print 'received a bad piece!'
             print 'expected ', expected
             print 'got ', got
+            # 
             # self.peer_dict[piece.peer_id]
         else:
             print 'piece checked OK'
@@ -127,12 +129,20 @@ class Controller(object):
     def get_next_block(self):
         index = self.pieces_requested.bin.find('0')
         begin = self.blocks_requested[index].bin.find('0') * 2**14
-        print self.pieces_requested.bin
-        print self.blocks_requested[index].bin
+        length = 2**14
+
+        if index >= 0:
+            print 'pieces requested so far: ' + self.pieces_requested.bin
+            print 'block requested in this piece: %s' %self.blocks_requested[index].bin
         # if '0' in self.pieces_requested.bin[:self.torrent.num_pieces]:
-        print 'index = %s'%index
-        print 'begin = %s'%begin
-        return index, begin
+            print 'index = %s'%index
+            print 'begin = %s'%begin
+
+            #handle end pieces
+            if '0' not in self.blocks_requested[index].bin[:-1]: #and self.blocks_requested[index].bin[:-1] == '0':
+                length = self.torrent.piece_length - (len(self.blocks_requested[index].bin)-1)*(2**14)
+            
+        return index, begin, length
 
     def send_control_message(self, type, peer_id):
         # sends a message (either choke, unchoke, interested, or not interested) to a peer
@@ -268,16 +278,19 @@ class PeerProtocol(Protocol):
             messages, self._buffer = Message.split_message(self._buffer, peer_id)
             for message in messages:
                 # print 'len of messages is: %d' %len(messages)
-                # print 'received a %s from %s' %(message.type, peer_id)
-                self.controller.peer_dict[peer_id].messages_received.append(message) #time stamp messages?
+                print 'received a %s from %s' %(message.type, self.transport.getPeer())
+                # self.controller.peer_dict[peer_id].messages_received.append(message) #time stamp messages?
                 self.controller.handle(message)
 
-            index, begin = self.controller.get_next_block()
 
-            if index is not None:
-                req = generate_message('request', index=index, begin=begin, length=2**14)
+            #this needs to get out of dataReceived... it only requests the next block after it receives a block
+
+            index, begin, length = self.controller.get_next_block()
+
+            if index >= 0:
+                req = generate_message('request', index=index, begin=begin, length=length)
                 self.transport.write(req.bytes)
-                # print 'sent req for index %r to %r' %(str(req.index), self.transport.getPeer())
+                print 'sent req for index %d and begin %d to %r' %(req.index, req.begin, self.transport.getPeer())
                 self.controller.blocks_requested[index].overwrite('0b1', begin/(2**14))
                 if '0' not in self.controller.blocks_requested[index].bin:
                     self.controller.pieces_requested.overwrite('0b1', index)
