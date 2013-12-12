@@ -192,8 +192,9 @@ class TrackerResponse(object):
         # make a dictionary of peer_id:peer pairs
     
     def req_peers_from_tracker(self, torrent):
+        print 'requesting peers'
         r = requests.get(torrent.announce_url, params=self.request_payload)
-        response = bdecode(r.text)
+        response = bdecode(r.content)
         peers_str = response['peers']
         peers = []
         for i in range(len(peers_str)/6):
@@ -219,10 +220,10 @@ class Peer(object):
         return ip, port
 
     def connect(self, controller):
+        print 'attempting to connect to ' + self.ip + ':' + str(self.port)
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
         reactor.connectTCP(self.ip, self.port, self.factory)
-        print 'attempting to connect to ' + self.ip + ':' + str(self.port)
 
 class Handshake(object):
     # should this inherit from Message?
@@ -348,7 +349,8 @@ def main():
     peers = tracker_response.peers
     #this needs to be changed to update when the controller gets new peers from the tracker
     for peer in peers:
-        peer.connect(controller)
+        if peer.port != 0:
+            peer.connect(controller)
         
 
     from twisted.internet import reactor
