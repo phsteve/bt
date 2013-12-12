@@ -87,14 +87,14 @@ class Controller(object):
 
     def piece_handler(self, piece):
         # <len=0009+X><id=7><index><begin><block>
-        # print "received piece #%s begin @ %s from %s" %(piece.index, piece.begin, self.peer_dict[piece.peer_id].ip)
+        print "received piece #%s begin @ %s from %s" %(piece.index, piece.begin, self.peer_dict[piece.peer_id].ip)
 
         
         self.blocks_completed[piece.index].overwrite('0b1', piece.begin/(2**14))
         # self.block_buffer[piece.index].append(piece)
         if '0' not in self.blocks_completed[piece.index].bin:
         #     self.check_hash(piece.index)
-            # print 'Finished downloading piece #%d' %piece.index
+            print 'Finished downloading piece #%d' %piece.index
             self.pieces_completed.overwrite('0b1', piece.index)
             # print 'pieces_completed: %s'%self.pieces_completed.bin
         self.received_file.seek(self.torrent.piece_length * piece.index + piece.begin)
@@ -221,8 +221,9 @@ class Peer(object):
     def connect(self, controller):
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
-        reactor.connectTCP('54.209.151.119', 59770, self.factory)
-        # print 'attempting to connect to ' + self.ip + ':' + str(self.port)
+        peer, ip = 
+        reactor.connectTCP(self.ip, self.port, self.factory)
+        print 'attempting to connect to ' + self.ip + ':' + str(self.port)
 
 class Handshake(object):
     # should this inherit from Message?
@@ -299,7 +300,7 @@ class PeerProtocol(Protocol):
             messages, self._buffer = Message.split_message(self._buffer, peer_id)
             for message in messages:
                 # print 'len of messages is: %d' %len(messages)
-                # print 'received a %s from %s' %(message.type, self.transport.getPeer())
+                print 'received a %s from %s' %(message.type, self.transport.getPeer())
                 # self.controller.peer_dict[peer_id].messages_received.append(message) #time stamp messages?
                 self.controller.handle(message)
 
