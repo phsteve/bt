@@ -6,7 +6,7 @@ from hashlib import sha1
 from twisted.internet.protocol import Protocol, ClientFactory
 import sys
 
-from message import Message, generate_message
+from message import Message, generate_message, DiffRequest
 
 #error handling (peer_id/info_hash mismatches, invalid bitfields etc)
 
@@ -210,7 +210,7 @@ class Peer(object):
         print 'attempting to connect to ' + self.ip + ':' + str(self.port)
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
-        reactor.connectTCP('54.209.119.147', 6969, self.factory)
+        reactor.connectTCP(self.ip, self.port, self.factory)
 
 class Handshake(object):
     # should this inherit from Message?
@@ -297,12 +297,12 @@ class PeerProtocol(Protocol):
             block = self.controller.get_next_block()
             #TODO: split into three functions
             if block:
-                req = message.DiffRequest(block['index'], block['begin'], block['length'])
+                req = DiffRequest(block['index'], block['begin'], block['length'])
                 self.transport.write(req.bytes)
                 # print 'sent req for index %d and begin %d to %r' %(req.index, req.begin, self.transport.getPeer())
-                self.controller.blocks_requested[index].overwrite('0b1', begin/(2**14))
-                if '0' not in self.controller.blocks_requested[index].bin:
-                    self.controller.pieces_requested.overwrite('0b1', index)
+                self.controller.blocks_requested[block['index']].overwrite('0b1', block['begin']/(2**14))
+                if '0' not in self.controller.blocks_requested[block['index']].bin:
+                    self.controller.pieces_requested.overwrite('0b1', block['index'])
 
 
     def connectionLost(self, reason):
