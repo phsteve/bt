@@ -28,7 +28,12 @@ class Controller(object):
         self.pieces_completed = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')
         self.blocks_requested = [bitstring.BitArray('0b' + self.piece_ratio * '0') for _ in xrange(self.torrent.num_pieces)]
         self.blocks_completed = [bitstring.BitArray('0b' + self.piece_ratio * '0') for _ in xrange(self.torrent.num_pieces)] #List of bitfields, each sublist is the beginning and end of 
-        self.block_buffer = [[] for _ in xrange(self.torrent.num_pieces)]
+        
+        num_blocks_in_last_piece = 1 + (self.torrent.file_length - (self.torrent.num_pieces-1)*self.torrent.piece_length) / 2**14
+                                    #length of last piece / block_length
+        self.blocks_requested[-1] = bitstring.BitArray('0b' + '0' * num_blocks_in_last_piece)
+        self.blocks_completed[-1] = bitstring.BitArray('0b' + '0' * num_blocks_in_last_piece)
+
 
     def handle(self, message):
         self.message_handler[message.type](message)
@@ -82,23 +87,22 @@ class Controller(object):
 
     def piece_handler(self, piece):
         # <len=0009+X><id=7><index><begin><block>
-        print "received piece #%s begin @ %s from %s" %(piece.index, piece.begin, self.peer_dict[piece.peer_id].ip)
-        #Need to implement hash checking, saving partial pieces to memory first
-        if self.big_pieces:
-            self.blocks_completed[piece.index].overwrite('0b1', piece.begin/(2**14))
-            # self.block_buffer[piece.index].append(piece)
-            if self.blocks_completed[piece.index].bin == '1'*self.piece_ratio:
-            #     to_write = ''.join(self.block_buffer[piece.index])
-            #     self.check_hash(piece.index)
-                print 'Finished downloading piece #%d' %piece.index
-                self.pieces_completed.overwrite('0b1', piece.index)
-            self.received_file.seek(self.torrent.piece_length * piece.index + piece.begin)
+        # print "received piece #%s begin @ %s from %s" %(piece.index, piece.begin, self.peer_dict[piece.peer_id].ip)
 
-            self.received_file.write(piece.block)
-        # self.data_list[piece.index] = piece.block
-        # print self.pieces_completed.bin
-        # print [_.bin for _ in self.blocks_completed]
-        if '0' not in self.pieces_completed.bin[:self.torrent.num_pieces-1]:
+        
+        self.blocks_completed[piece.index].overwrite('0b1', piece.begin/(2**14))
+        # self.block_buffer[piece.index].append(piece)
+        if '0' not in self.blocks_completed[piece.index].bin:
+        #     self.check_hash(piece.index)
+            # print 'Finished downloading piece #%d' %piece.index
+            self.pieces_completed.overwrite('0b1', piece.index)
+            # print 'pieces_completed: %s'%self.pieces_completed.bin
+        self.received_file.seek(self.torrent.piece_length * piece.index + piece.begin)
+
+        self.received_file.write(piece.block)
+
+
+        if '0' not in self.pieces_completed.bin[:self.torrent.num_pieces]:
             print 'Done!'
             from twisted.internet import reactor
             reactor.stop()
@@ -111,7 +115,7 @@ class Controller(object):
         pass
 
     def check_hash(self, bytes, index):
-        # print self.torrent.piece_hashes[piece.index]
+        print self.torrent.piece_hashes[piece.index]
         expected = struct.unpack('20s', self.torrent.piece_hashes[index])[0]
         got = sha1(bytes).digest()
         # import pdb
@@ -127,22 +131,38 @@ class Controller(object):
 
     ##message senders#########
     def get_next_block(self):
+
+        #usual, non-end values for index, begin, length
         index = self.pieces_requested.bin.find('0')
         begin = self.blocks_requested[index].bin.find('0') * 2**14
         length = 2**14
 
         if index >= 0:
-            print 'pieces requested so far: ' + self.pieces_requested.bin
-            print 'block requested in this piece: %s' %self.blocks_requested[index].bin
+            # print 'pieces already requested so far: ' + self.pieces_requested.bin
+            # print 'blocks already requested in this piece: %s' %self.blocks_requested[index].bin
         # if '0' in self.pieces_requested.bin[:self.torrent.num_pieces]:
-            print 'index = %s'%index
-            print 'begin = %s'%begin
+            # print 'index = %s'%index
+            # print 'begin = %s'%begin
 
             #handle end pieces
             if '0' not in self.blocks_requested[index].bin[:-1]: #and self.blocks_requested[index].bin[:-1] == '0':
-                length = self.torrent.piece_length - (len(self.blocks_requested[index].bin)-1)*(2**14)
-            
+                # print 'requesting last block of this piece'
+                length = self.get_last_block_length(index)
+
+        if index == self.torrent.num_pieces - 1:
+            #last piece
+            # print 'REQUESTING THE LAST BLOCK!!!!'
+            if '0' not in self.blocks_requested[index].bin[:-1]: #and self.blocks_requested[index].bin[:-1] == '0':
+                # print 'requesting last block of last piece'
+                length = (self.torrent.file_length - self.torrent.piece_length * (self.torrent.num_pieces-1) - (len(self.blocks_requested[index].bin)-1)*(2**14))
+                # print 'length = %d' %length
+                # length = total_file_length - length of all other pieces - 2**14 * len(blocks_req)
+
         return index, begin, length
+
+    def get_last_block_length(self, index):
+        length = self.torrent.piece_length - (len(self.blocks_requested[index].bin)-1)*(2**14)
+        return length
 
     def send_control_message(self, type, peer_id):
         # sends a message (either choke, unchoke, interested, or not interested) to a peer
@@ -160,6 +180,7 @@ class TorrentFile(object):
         self.info_hash = sha1(bencode(self.decoded['info'])).digest()
         self.piece_hashes = [self.pieces[i:20+i] for i in range(0, len(self.pieces), 20)]
         self.piece_length = self.info['piece length']
+        self.file_length = self.info['length']
         self.name = self.info['name']
 
 class TrackerResponse(object):
@@ -201,7 +222,7 @@ class Peer(object):
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
         reactor.connectTCP('54.209.151.119', 59770, self.factory)
-        print 'attempting to connect to ' + self.ip + ':' + str(self.port)
+        # print 'attempting to connect to ' + self.ip + ':' + str(self.port)
 
 class Handshake(object):
     # should this inherit from Message?
@@ -225,7 +246,7 @@ class PeerProtocol(Protocol):
 
 
     def connectionMade(self):
-        print 'connection made to ' + self.factory.peer.ip
+        # print 'connection made to ' + self.factory.peer.ip
         # import pdb
         # pdb.set_trace()
         sent_handshake = Handshake(self.controller.info_hash).handshake
@@ -249,10 +270,10 @@ class PeerProtocol(Protocol):
         self.controller.add_peer(self.factory.peer)
         self.shook_hands = True
         self.controller.peer_dict[peer_id].handshake = received_handshake
-        print 'handshake received: ' + received_handshake.handshake
+        # print 'handshake received: ' + received_handshake.handshake
     
         inter = generate_message('interested')
-        print 'sent an interested to %r' %(self.transport.getPeer())
+        # print 'sent an interested to %r' %(self.transport.getPeer())
         self.transport.write(inter.bytes)
         self.controller.peer_dict[peer_id].status['am_interested'] = 1
         buff = buff[68:]
@@ -263,7 +284,7 @@ class PeerProtocol(Protocol):
     def dataReceived(self, bytes):
         messages = []
         self._buffer += bytes
-        # print 'bytes received: ' + repr(bytes)
+        
         if not self.shook_hands:
             if len(self._buffer) >= 68:
                 if self.is_handshake(bytes):
@@ -278,7 +299,7 @@ class PeerProtocol(Protocol):
             messages, self._buffer = Message.split_message(self._buffer, peer_id)
             for message in messages:
                 # print 'len of messages is: %d' %len(messages)
-                print 'received a %s from %s' %(message.type, self.transport.getPeer())
+                # print 'received a %s from %s' %(message.type, self.transport.getPeer())
                 # self.controller.peer_dict[peer_id].messages_received.append(message) #time stamp messages?
                 self.controller.handle(message)
 
@@ -290,7 +311,7 @@ class PeerProtocol(Protocol):
             if index >= 0:
                 req = generate_message('request', index=index, begin=begin, length=length)
                 self.transport.write(req.bytes)
-                print 'sent req for index %d and begin %d to %r' %(req.index, req.begin, self.transport.getPeer())
+                # print 'sent req for index %d and begin %d to %r' %(req.index, req.begin, self.transport.getPeer())
                 self.controller.blocks_requested[index].overwrite('0b1', begin/(2**14))
                 if '0' not in self.controller.blocks_requested[index].bin:
                     self.controller.pieces_requested.overwrite('0b1', index)
