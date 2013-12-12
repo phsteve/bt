@@ -124,6 +124,11 @@ class Request(Message):
             self.bytes = ''.join([struct.pack('>i', self.message_len), struct.pack('b', 6), struct.pack('>i', self.index), struct.pack('>i', self.begin), struct.pack('>i', self.length)])
         super(Request, self).__init__(bytes=self.bytes, peer_id=peer_id)
 
+class DiffRequest(Message):
+    def __init__(self, index, begin, length):
+        message_len = 13
+        bytes = ''.join([struct.pack('>i', message_len), struct.pack('b', 6), struct.pack('>i', index), struct.pack('>i', begin), struct.pack('>i', length)])
+        super(Request, self).__init__(bytes=bytes)
 
 class Piece(Message):
     '''<len=0009+X><id=7><index><begin><block>'''
@@ -171,15 +176,3 @@ def interpret_bytes(bytes, peer_id):
         type = 0
     message = type_to_class[digit_to_type[type]](bytes=bytes, peer_id=peer_id) #yuck
     return message
-
-
-
-
-
-
-
-
-
-
-
-

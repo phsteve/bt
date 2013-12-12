@@ -134,31 +134,18 @@ class Controller(object):
 
         #usual, non-end values for index, begin, length
         index = self.pieces_requested.bin.find('0')
-        begin = self.blocks_requested[index].bin.find('0') * 2**14
-        length = 2**14
+        if index > -1:
+            begin = self.blocks_requested[index].bin.find('0') * 2**14
+            
 
-        if index >= 0:
-            # print 'pieces already requested so far: ' + self.pieces_requested.bin
-            # print 'blocks already requested in this piece: %s' %self.blocks_requested[index].bin
-        # if '0' in self.pieces_requested.bin[:self.torrent.num_pieces]:
-            # print 'index = %s'%index
-            # print 'begin = %s'%begin
-
-            #handle end pieces
-            if '0' not in self.blocks_requested[index].bin[:-1]: #and self.blocks_requested[index].bin[:-1] == '0':
-                # print 'requesting last block of this piece'
+            if index >= 0 and '0' not in self.blocks_requested[index].bin[:-1]:
                 length = self.get_last_block_length(index)
-
-        if index == self.torrent.num_pieces - 1:
-            #last piece
-            # print 'REQUESTING THE LAST BLOCK!!!!'
-            if '0' not in self.blocks_requested[index].bin[:-1]: #and self.blocks_requested[index].bin[:-1] == '0':
-                # print 'requesting last block of last piece'
+            elif index == self.torrent.num_pieces - 1 and '0' not in self.blocks_requested[index].bin[:-1]:
                 length = (self.torrent.file_length - self.torrent.piece_length * (self.torrent.num_pieces-1) - (len(self.blocks_requested[index].bin)-1)*(2**14))
-                # print 'length = %d' %length
-                # length = total_file_length - length of all other pieces - 2**14 * len(blocks_req)
+            else:
+                length = 2**14
 
-        return index, begin, length
+            return {'index': index, 'begin': begin, 'length': length}
 
     def get_last_block_length(self, index):
         length = self.torrent.piece_length - (len(self.blocks_requested[index].bin)-1)*(2**14)
@@ -223,7 +210,7 @@ class Peer(object):
         print 'attempting to connect to ' + self.ip + ':' + str(self.port)
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
-        reactor.connectTCP(self.ip, self.port, self.factory)
+        reactor.connectTCP('54.209.119.147', 6969, self.factory)
 
 class Handshake(object):
     # should this inherit from Message?
@@ -307,10 +294,10 @@ class PeerProtocol(Protocol):
 
             #this needs to get out of dataReceived... it only requests the next block after it receives a block
 
-            index, begin, length = self.controller.get_next_block()
-
-            if index >= 0:
-                req = generate_message('request', index=index, begin=begin, length=length)
+            block = self.controller.get_next_block()
+            #TODO: split into three functions
+            if block:
+                req = message.DiffRequest(block['index'], block['begin'], block['length'])
                 self.transport.write(req.bytes)
                 # print 'sent req for index %d and begin %d to %r' %(req.index, req.begin, self.transport.getPeer())
                 self.controller.blocks_requested[index].overwrite('0b1', begin/(2**14))
