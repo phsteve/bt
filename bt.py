@@ -221,7 +221,6 @@ class Peer(object):
     def connect(self, controller):
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
-        peer, ip = 
         reactor.connectTCP(self.ip, self.port, self.factory)
         print 'attempting to connect to ' + self.ip + ':' + str(self.port)
 
