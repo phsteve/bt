@@ -4,7 +4,7 @@ import struct
 import bitstring
 from hashlib import sha1
 from twisted.internet.protocol import Protocol, ClientFactory
-import sys
+import sys, os
 
 from message import Message, generate_message, DiffRequest
 
@@ -139,14 +139,14 @@ class Controller(object):
             
 
             if (index == self.torrent.num_pieces - 1) and ('0' not in self.blocks_requested[index].bin[:-1]):
-                print 'last block of last piece'
+                # print 'last block of last piece'
                 #last block of last piece
                 length = self.get_last_block_length_of_last_piece(index)
             elif index >= 0 and '0' not in self.blocks_requested[index].bin[:-1]:
-                print 'last block of normal piece'
+                # print 'last block of normal piece'
                 length = self.get_last_block_length(index)
             else:
-                print 'normal block'
+                # print 'normal block'
                 length = 2**14
 
             return {'index': index, 'begin': begin, 'length': length}
@@ -219,7 +219,7 @@ class Peer(object):
         print 'attempting to connect to ' + self.ip + ':' + str(self.port)
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
-        reactor.connectTCP('54.209.119.147', self.port, self.factory)
+        reactor.connectTCP(self.ip, self.port, self.factory)
 
 class Handshake(object):
     # should this inherit from Message?
@@ -336,6 +336,9 @@ def main():
         # pdb.set_trace()
     except:
         sys.exit('Please enter a valid file path to a torrent')
+    if os.path.isfile(torrent.name):
+        print 'removing already existing file'
+        os.remove(torrent.name)
     received_file = open(torrent.name, 'wb')
     controller = Controller(torrent, received_file)
     tracker_response = TrackerResponse(torrent)
