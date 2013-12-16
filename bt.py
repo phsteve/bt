@@ -91,6 +91,7 @@ class Controller(object):
 
         
         self.blocks_completed[piece.index].overwrite('0b1', piece.begin/(2**14))
+        # print 'blocks completed: ' + self.blocks_completed[piece.index].bin
         # self.block_buffer[piece.index].append(piece)
         if '0' not in self.blocks_completed[piece.index].bin:
         #     self.check_hash(piece.index)
@@ -131,24 +132,32 @@ class Controller(object):
 
     ##message senders#########
     def get_next_block(self):
-
         #usual, non-end values for index, begin, length
         index = self.pieces_requested.bin.find('0')
         if index > -1:
             begin = self.blocks_requested[index].bin.find('0') * 2**14
             
 
-            if index >= 0 and '0' not in self.blocks_requested[index].bin[:-1]:
+            if (index == self.torrent.num_pieces - 1) and ('0' not in self.blocks_requested[index].bin[:-1]):
+                print 'last block of last piece'
+                #last block of last piece
+                length = self.get_last_block_length_of_last_piece(index)
+            elif index >= 0 and '0' not in self.blocks_requested[index].bin[:-1]:
+                print 'last block of normal piece'
                 length = self.get_last_block_length(index)
-            elif index == self.torrent.num_pieces - 1 and '0' not in self.blocks_requested[index].bin[:-1]:
-                length = (self.torrent.file_length - self.torrent.piece_length * (self.torrent.num_pieces-1) - (len(self.blocks_requested[index].bin)-1)*(2**14))
             else:
+                print 'normal block'
                 length = 2**14
 
             return {'index': index, 'begin': begin, 'length': length}
 
     def get_last_block_length(self, index):
         length = self.torrent.piece_length - (len(self.blocks_requested[index].bin)-1)*(2**14)
+        return length
+
+    def get_last_block_length_of_last_piece(self, index):
+        length = (self.torrent.file_length - (self.torrent.piece_length * (self.torrent.num_pieces - 1))) \
+                 - ((len(self.blocks_requested[index].bin) - 1) * 2**14)
         return length
 
     def send_control_message(self, type, peer_id):
@@ -210,7 +219,7 @@ class Peer(object):
         print 'attempting to connect to ' + self.ip + ':' + str(self.port)
         from twisted.internet import reactor
         self.factory = PeerClientFactory(self, controller)
-        reactor.connectTCP(self.ip, self.port, self.factory)
+        reactor.connectTCP('54.209.119.147', self.port, self.factory)
 
 class Handshake(object):
     # should this inherit from Message?
@@ -288,26 +297,23 @@ class PeerProtocol(Protocol):
             for message in messages:
                 # print 'len of messages is: %d' %len(messages)
                 print 'received a %s from %s' %(message.type, self.transport.getPeer())
-                # self.controller.peer_dict[peer_id].messages_received.append(message) #time stamp messages?
+                
                 self.controller.handle(message)
 
 
-            #this needs to get out of dataReceived... it only requests the next block after it receives a block
-
+            
             block = self.controller.get_next_block()
             #TODO: split into three functions
             if block:
                 req = DiffRequest(block['index'], block['begin'], block['length'])
                 self.transport.write(req.bytes)
-                # print 'sent req for index %d and begin %d to %r' %(req.index, req.begin, self.transport.getPeer())
+                print 'sent req for index %d and begin %d with length %d to %r' %(req.index, req.begin, req.length, self.transport.getPeer())
                 self.controller.blocks_requested[block['index']].overwrite('0b1', block['begin']/(2**14))
                 if '0' not in self.controller.blocks_requested[block['index']].bin:
                     self.controller.pieces_requested.overwrite('0b1', block['index'])
 
-
     def connectionLost(self, reason):
         print 'connection lost from: ' + self.factory.peer.ip
-
 
 class PeerClientFactory(ClientFactory):
     protocol = PeerProtocol

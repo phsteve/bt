@@ -128,6 +128,9 @@ class DiffRequest(Message):
     def __init__(self, index, begin, length):
         message_len = 13
         bytes = ''.join([struct.pack('>i', message_len), struct.pack('b', 6), struct.pack('>i', index), struct.pack('>i', begin), struct.pack('>i', length)])
+        self.index = index
+        self.begin = begin
+        self.length = length
         super(DiffRequest, self).__init__(bytes=bytes)
 
 class Piece(Message):
