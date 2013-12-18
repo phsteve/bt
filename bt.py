@@ -36,20 +36,40 @@ class Controller(object):
         self.blocks_requested[-1] = bitstring.BitArray('0b' + '0' * num_blocks_in_last_piece)
         self.blocks_completed[-1] = bitstring.BitArray('0b' + '0' * num_blocks_in_last_piece)
 
-
-    def get_outstanding_blocks(self):
+    @staticmethod
+    def get_outstanding_blocks(blocks_completed, blocks_requested):
         #return list of bitstrings that have been requested but not downloaded
-        return [comp ^ req for comp, req in zip(self.blocks_completed, self.blocks_requested)]
+        return [comp ^ req for comp, req in zip(blocks_completed, blocks_requested)]
 
-    def reset_blocks_requested(self):
-        return [req & outstanding for req, outstanding in zip(blocks_requested, self.get_outstanding_blocks())]
+    @staticmethod
+    def get_outstanding_pieces(pieces_completed, pieces_requested):
+        return pieces_completed ^ pieces_requested
+
+    @staticmethod
+    def reset_blocks_requested(blocks_completed, blocks_requested):
+        return [((req & completed) | outstanding) for req, completed, outstanding in zip(blocks_requested, blocks_completed, Controller.get_outstanding_blocks(blocks_completed, blocks_requested))]
+
+    @staticmethod
+    def reset_pieces_requested(pieces_completed, pieces_requested):
+        return (pieces_requested & pieces_completed) | Controller.get_outstanding_pieces(pieces_completed, pieces_requested)
 
     def reset_blocks(self):
         print "resetting blocks"
-        self.blocks_requested = reset_blocks_requested()
+        self.blocks_requested = self.reset_blocks_requested(self.blocks_completed, self.blocks_requested)
+        self.pieces_requested = self.reset_pieces_requested(self.pieces_completed, self.pieces_requested)
+        for i in len(self.pieces_requested.bin):
+            if self.pieces_requested[i] == '0':
+                print self.blocks_requested[i].bin
+        # indices_to_overwrite = [index for index, item in enumerate(self.blocks_requested) if '0' in item.bin]
+        # for index in indices_to_overwrite:
+        #     self.pieces_requested.overwrite('0b0', index)
 
-    lc = LoopingCall(reset_blocks)
-    lc.start(20)
+    # def reset_pieces(self):
+    #     print "resetting pieces"
+    #     self.blocks_requested = self.reset_blocks_requested(self.blocks_completed, self.blocks_requested)
+    #     self.pieces_requested = self.reset_pieces_requested(self.pieces_completed, self.pieces_completed)
+
+
 
     def handle(self, message):
         self.message_handler[message.type](message)
@@ -113,8 +133,9 @@ class Controller(object):
         # self.block_buffer[piece.index].append(piece)
         if '0' not in self.blocks_completed[piece.index].bin:
         #     self.check_hash(piece.index)
-            print 'Finished downloading piece #%d' %piece.index
+            # print 'Finished downloading piece #%d' %piece.index
             self.pieces_completed.overwrite('0b1', piece.index)
+            print 'pieces completed: %s' % self.pieces_completed.bin
             # print 'pieces_completed: %s'%self.pieces_completed.bin
         self.received_file.seek(self.torrent.piece_length * piece.index + piece.begin)
 
@@ -413,9 +434,12 @@ def main():
         if peer.port != 0:
             peer.connect(controller)
     
+    lc = LoopingCall(controller.reset_blocks)
+    lc.start(45)
 
     from twisted.internet import reactor
     reactor.run()
+
 
 
 
