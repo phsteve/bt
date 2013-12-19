@@ -6,6 +6,8 @@ from hashlib import sha1
 from twisted.internet.protocol import Protocol, ClientFactory
 from twisted.internet.task import LoopingCall
 import sys
+import os
+from copy import copy
 
 
 from message import Message, generate_message, DiffRequest, KeepAlive
@@ -47,29 +49,32 @@ class Controller(object):
 
     @staticmethod
     def reset_blocks_requested(blocks_completed, blocks_requested):
-        return [((req & completed) | outstanding) for req, completed, outstanding in zip(blocks_requested, blocks_completed, Controller.get_outstanding_blocks(blocks_completed, blocks_requested))]
+        result = [((req & completed) | outstanding) for req, completed, outstanding in zip(blocks_requested, blocks_completed, Controller.get_outstanding_blocks(blocks_completed, blocks_requested))]
+        # print 'new blocks: ' + '\n'.join(r.bin for r in result)
+        return result
 
     @staticmethod
     def reset_pieces_requested(pieces_completed, pieces_requested):
-        return (pieces_requested & pieces_completed) | Controller.get_outstanding_pieces(pieces_completed, pieces_requested)
+        result = (pieces_requested & pieces_completed) | Controller.get_outstanding_pieces(pieces_completed, pieces_requested)
+        # print 'new pieces: ' + result.bin
+        return result
 
     def reset_blocks(self):
-        print "resetting blocks"
-        self.blocks_requested = self.reset_blocks_requested(self.blocks_completed, self.blocks_requested)
-        self.pieces_requested = self.reset_pieces_requested(self.pieces_completed, self.pieces_requested)
-        for i in len(self.pieces_requested.bin):
-            if self.pieces_requested[i] == '0':
-                print self.blocks_requested[i].bin
-        # indices_to_overwrite = [index for index, item in enumerate(self.blocks_requested) if '0' in item.bin]
-        # for index in indices_to_overwrite:
-        #     self.pieces_requested.overwrite('0b0', index)
-
-    # def reset_pieces(self):
-    #     print "resetting pieces"
-    #     self.blocks_requested = self.reset_blocks_requested(self.blocks_completed, self.blocks_requested)
-    #     self.pieces_requested = self.reset_pieces_requested(self.pieces_completed, self.pieces_completed)
-
-
+        print 20* '*\n' + "resetting blocks" + 20*'*\n'
+        print [b.bin for b in self.blocks_requested]
+        print self.pieces_requested.bin
+        # self.blocks_requested = self.reset_blocks_requested(self.blocks_completed, self.blocks_requested)
+        # self.pieces_requested = self.reset_pieces_requested(self.pieces_completed, self.pieces_requested)
+        print 'new blocks: '
+        # for i in range(len(self.pieces_requested.bin)):
+        #     if self.pieces_requested.bin[i] == '0':
+        #         print self.blocks_requested[i].bin
+        self.blocks_requested = self.blocks_completed[:]
+        self.pieces_requested = copy(self.pieces_completed)
+        import pdb
+        pdb.set_trace()
+        print [b.bin for b in self.blocks_requested]
+        print self.pieces_requested.bin
 
     def handle(self, message):
         self.message_handler[message.type](message)
@@ -203,13 +208,17 @@ class Controller(object):
         msg = generate_message(type, peer_id=peer_id)
         self.peer_dict[peer_id].factory.transport.write(msg.bytes)
 
-    def split_file(self):
-        for file_ in self.files:
+    @staticmethod
+    def split_file(file_paths, file_to_split):
+        for file_path in file_paths:
             # seek_to = 0
-            path = '/'.join(file_['path'])
+            path = '/'.join(file_path['path'])
+            if not os.path.exists(path):
+                os.makedirs(path)
             f = open(path, 'wb')
             # self.received_file.seek(seek_to)
-            f.write(self.received_file.read(file_['length']))
+            f.write(file_to_split.read(file_path['length']))
+
 
 
 class TorrentFile(object):
@@ -425,8 +434,6 @@ def main():
         received_file = open('temp', 'wb')
 
     controller = Controller(torrent, received_file)
-    # import pdb
-    # pdb.set_trace()
     tracker_response = TrackerResponse(torrent)
     peers = tracker_response.peers
     #this needs to be changed to update when the controller gets new peers from the tracker
