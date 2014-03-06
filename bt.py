@@ -37,6 +37,8 @@ class Controller(object):
                                     #length of last piece / block_length
         self.blocks_requested[-1] = bitstring.BitArray('0b' + '0' * num_blocks_in_last_piece)
         self.blocks_completed[-1] = bitstring.BitArray('0b' + '0' * num_blocks_in_last_piece)
+        self.outstanding_pieces = ''
+        self.outstanding_blocks = ''
 
     @staticmethod
     def get_outstanding_blocks(blocks_completed, blocks_requested):
@@ -46,6 +48,10 @@ class Controller(object):
     @staticmethod
     def get_outstanding_pieces(pieces_completed, pieces_requested):
         return pieces_completed ^ pieces_requested
+
+    def set_outstanding_blocks(self):
+        self.outstanding_blocks = self.get_outstanding_blocks(self.blocks_completed, self.blocks_requested)
+        self.outstanding_pieces = self.get_outstanding_pieces(self.pieces_completed, self.pieces_requested)
 
     @staticmethod
     def reset_blocks_requested(blocks_completed, blocks_requested):
@@ -60,21 +66,22 @@ class Controller(object):
         return result
 
     def reset_blocks(self):
-        print 20* '*\n' + "resetting blocks" + 20*'*\n'
-        print [b.bin for b in self.blocks_requested]
-        print self.pieces_requested.bin
-        # self.blocks_requested = self.reset_blocks_requested(self.blocks_completed, self.blocks_requested)
-        # self.pieces_requested = self.reset_pieces_requested(self.pieces_completed, self.pieces_requested)
-        print 'new blocks: '
-        # for i in range(len(self.pieces_requested.bin)):
-        #     if self.pieces_requested.bin[i] == '0':
-        #         print self.blocks_requested[i].bin
+        # print 20* '*\n' + "resetting blocks" + 20*'*\n'
+        # print [b.bin for b in self.blocks_requested]
+        # print self.pieces_requested.bin
+        # # self.blocks_requested = self.reset_blocks_requested(self.blocks_completed, self.blocks_requested)
+        # # self.pieces_requested = self.reset_pieces_requested(self.pieces_completed, self.pieces_requested)
+        # print 'new blocks: '
+        # # for i in range(len(self.pieces_requested.bin)):
+        # #     if self.pieces_requested.bin[i] == '0':
+        # #         print self.blocks_requested[i].bin
         self.blocks_requested = self.blocks_completed[:]
         self.pieces_requested = copy(self.pieces_completed)
-        import pdb
-        pdb.set_trace()
-        print [b.bin for b in self.blocks_requested]
-        print self.pieces_requested.bin
+        # # import pdb
+        # # pdb.set_trace()
+        # print [b.bin for b in self.blocks_requested]
+        # print self.pieces_requested.bin
+        # pass
 
     def handle(self, message):
         self.message_handler[message.type](message)
@@ -149,10 +156,15 @@ class Controller(object):
 
         if '0' not in self.pieces_completed.bin[:self.torrent.num_pieces]:
             print 'Done!'
-            if self.torrent.mode == 'multi':
-                self.split_file()
+
             from twisted.internet import reactor
             reactor.stop()
+            if self.torrent.mode == 'multi':
+                if not os.path.exists(self.torrent.name):
+                    os.mkdir(self.torrent.name)
+                os.chdir(self.torrent.name)
+                self.split_file(self.torrent.files, self.received_file)
+
 
 
     def cancel_handler(self, message):
@@ -194,6 +206,23 @@ class Controller(object):
 
             return {'index': index, 'begin': begin, 'length': length}
 
+    def re_request_blocks(self):
+        index = self.outstanding_pieces.bin.find('1')
+        if index > -1:
+            begin = self.outstanding_blocks[index].bin.find('1') * 2**14
+            if (index == self.torrent.num_pieces - 1) and ('1' not in self.outstanding_blocks[index].bin[:-1]):
+                # print 'last block of last piece'
+                #last block of last piece
+                length = self.get_last_block_length_of_last_piece(index)
+            elif index >= 0 and '1' not in self.outstanding_blocks[index].bin[:-1]:
+                # print 'last block of normal piece'
+                length = self.get_last_block_length(index)
+            else:
+                # print 'normal block'
+                length = 2**14
+
+            return {'index': index, 'begin': begin, 'length': length}
+
     def get_last_block_length(self, index):
         length = self.torrent.piece_length - (len(self.blocks_requested[index].bin)-1)*(2**14)
         return length
@@ -211,13 +240,22 @@ class Controller(object):
     @staticmethod
     def split_file(file_paths, file_to_split):
         for file_path in file_paths:
-            # seek_to = 0
-            path = '/'.join(file_path['path'])
-            if not os.path.exists(path):
-                os.makedirs(path)
-            f = open(path, 'wb')
+            if len(file_path['path']) > 1:
+                path = '/'.join(file_path['path'][:-1])
+                # filename = file_path['path'][-1]
+                entire_path = '/'.join(file_path['path'])
+                if not os.path.exists(path):
+                    os.makedirs(path)
+            else:
+                entire_path = file_path['path'][0]
+            f = open(entire_path, 'w+b')
+            # import pdb
+            # pdb.set_trace()
             # self.received_file.seek(seek_to)
             f.write(file_to_split.read(file_path['length']))
+            f.close()
+
+
 
 
 
@@ -272,6 +310,8 @@ class TrackerResponse(object):
         print 'requesting peers'
         resp = requests.get(torrent.announce_url, params=self.request_payload)
         response = bdecode(resp.content)
+        # import pdb
+        # pdb.set_trace()
         peers_str = response['peers']
         peers = []
         for i in range(len(peers_str)/6):
@@ -401,6 +441,17 @@ class PeerProtocol(Protocol):
                 if '0' not in self.controller.blocks_requested[block['index']].bin:
                     self.controller.pieces_requested.overwrite('0b1', block['index'])
 
+            else:
+                block = self.controller.re_request_blocks()
+                if block:
+                    req = DiffRequest(block['index'], block['begin'], block['length'])
+                    self.transport.write(req.bytes)
+                    print 'sent req for index %d and begin %d with length %d to %r' %(req.index, req.begin, req.length, self.transport.getPeer())
+                    
+                    self.controller.outstanding_blocks[block['index']].overwrite('0b0', block['begin']/(2**14))
+                    if '1' not in self.controller.outstanding_blocks[block['index']].bin:
+                        self.controller.outstanding_pieces.overwrite('0b0', block['index'])
+
     def connectionLost(self, reason):
         print 'connection lost from: ' + self.factory.peer.ip
 
@@ -429,20 +480,22 @@ def main():
         sys.exit('Please enter a valid file path to a valid torrent, error: %s'%err)
 
     if torrent.mode == 'single':
-        received_file = open(torrent.name, 'wb')
+        received_file = open(torrent.name, 'w+b')
     elif torrent.mode == 'multi':
-        received_file = open('temp', 'wb')
+        received_file = open('temp', 'w+b')
 
     controller = Controller(torrent, received_file)
     tracker_response = TrackerResponse(torrent)
     peers = tracker_response.peers
+    # import pdb
+    # pdb.set_trace()
     #this needs to be changed to update when the controller gets new peers from the tracker
     for peer in peers:
         if peer.port != 0:
             peer.connect(controller)
     
-    lc = LoopingCall(controller.reset_blocks)
-    lc.start(45)
+    lc1 = LoopingCall(controller.set_outstanding_blocks)
+    lc1.start(30)
 
     from twisted.internet import reactor
     reactor.run()
