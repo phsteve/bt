@@ -4,15 +4,20 @@ import struct
 import bitstring
 from hashlib import sha1
 from twisted.internet.protocol import Protocol, ClientFactory
-import sys, os
+from twisted.internet.task import LoopingCall
+import sys
+import os
+from copy import copy
 
-from message import Message, generate_message, DiffRequest
+
+from message import Message, generate_message, DiffRequest, KeepAlive
 
 #error handling (peer_id/info_hash mismatches, invalid bitfields etc)
 
 MY_PEER_ID = '-SK0001-asdfasdfasdf'
 
 class Controller(object):
+
     def __init__(self, torrent, received_file):
         self.peer_dict = {}
         self.torrent = torrent
@@ -28,12 +33,55 @@ class Controller(object):
         self.pieces_completed = bitstring.BitArray('0b' + self.torrent.num_pieces * '0')
         self.blocks_requested = [bitstring.BitArray('0b' + self.piece_ratio * '0') for _ in xrange(self.torrent.num_pieces)]
         self.blocks_completed = [bitstring.BitArray('0b' + self.piece_ratio * '0') for _ in xrange(self.torrent.num_pieces)] #List of bitfields, each sublist is the beginning and end of 
-        
         num_blocks_in_last_piece = 1 + (self.torrent.file_length - (self.torrent.num_pieces-1)*self.torrent.piece_length) / 2**14
                                     #length of last piece / block_length
         self.blocks_requested[-1] = bitstring.BitArray('0b' + '0' * num_blocks_in_last_piece)
         self.blocks_completed[-1] = bitstring.BitArray('0b' + '0' * num_blocks_in_last_piece)
+        self.outstanding_pieces = ''
+        self.outstanding_blocks = ''
 
+    @staticmethod
+    def get_outstanding_blocks(blocks_completed, blocks_requested):
+        #return list of bitstrings that have been requested but not downloaded
+        return [comp ^ req for comp, req in zip(blocks_completed, blocks_requested)]
+
+    @staticmethod
+    def get_outstanding_pieces(pieces_completed, pieces_requested):
+        return pieces_completed ^ pieces_requested
+
+    def set_outstanding_blocks(self):
+        self.outstanding_blocks = self.get_outstanding_blocks(self.blocks_completed, self.blocks_requested)
+        self.outstanding_pieces = self.get_outstanding_pieces(self.pieces_completed, self.pieces_requested)
+
+    @staticmethod
+    def reset_blocks_requested(blocks_completed, blocks_requested):
+        result = [((req & completed) | outstanding) for req, completed, outstanding in zip(blocks_requested, blocks_completed, Controller.get_outstanding_blocks(blocks_completed, blocks_requested))]
+        # print 'new blocks: ' + '\n'.join(r.bin for r in result)
+        return result
+
+    @staticmethod
+    def reset_pieces_requested(pieces_completed, pieces_requested):
+        result = (pieces_requested & pieces_completed) | Controller.get_outstanding_pieces(pieces_completed, pieces_requested)
+        # print 'new pieces: ' + result.bin
+        return result
+
+    def reset_blocks(self):
+        # print 20* '*\n' + "resetting blocks" + 20*'*\n'
+        # print [b.bin for b in self.blocks_requested]
+        # print self.pieces_requested.bin
+        # # self.blocks_requested = self.reset_blocks_requested(self.blocks_completed, self.blocks_requested)
+        # # self.pieces_requested = self.reset_pieces_requested(self.pieces_completed, self.pieces_requested)
+        # print 'new blocks: '
+        # # for i in range(len(self.pieces_requested.bin)):
+        # #     if self.pieces_requested.bin[i] == '0':
+        # #         print self.blocks_requested[i].bin
+        self.blocks_requested = self.blocks_completed[:]
+        self.pieces_requested = copy(self.pieces_completed)
+        # # import pdb
+        # # pdb.set_trace()
+        # print [b.bin for b in self.blocks_requested]
+        # print self.pieces_requested.bin
+        # pass
 
     def handle(self, message):
         self.message_handler[message.type](message)
@@ -72,6 +120,8 @@ class Controller(object):
 
     def have_handler(self, message):
         index = struct.unpack('!i', message.payload)[0]
+        if self.peer_dict[message.peer_id].has_pieces == '0':
+            self.peer_dict[message.peer_id].has_pieces = bitstring.BitArray('0b' + '0' * self.torrent.num_pieces)
         self.set_peer_has_pieces_by_index(message.peer_id, index)
 
 
@@ -95,8 +145,9 @@ class Controller(object):
         # self.block_buffer[piece.index].append(piece)
         if '0' not in self.blocks_completed[piece.index].bin:
         #     self.check_hash(piece.index)
-            print 'Finished downloading piece #%d' %piece.index
+            # print 'Finished downloading piece #%d' %piece.index
             self.pieces_completed.overwrite('0b1', piece.index)
+            print 'pieces completed: %s' % self.pieces_completed.bin
             # print 'pieces_completed: %s'%self.pieces_completed.bin
         self.received_file.seek(self.torrent.piece_length * piece.index + piece.begin)
 
@@ -105,8 +156,15 @@ class Controller(object):
 
         if '0' not in self.pieces_completed.bin[:self.torrent.num_pieces]:
             print 'Done!'
+
             from twisted.internet import reactor
             reactor.stop()
+            if self.torrent.mode == 'multi':
+                if not os.path.exists(self.torrent.name):
+                    os.mkdir(self.torrent.name)
+                os.chdir(self.torrent.name)
+                self.split_file(self.torrent.files, self.received_file)
+
 
 
     def cancel_handler(self, message):
@@ -116,7 +174,7 @@ class Controller(object):
         pass
 
     def check_hash(self, bytes, index):
-        print self.torrent.piece_hashes[piece.index]
+        # print self.torrent.piece_hashes[piece.index]
         expected = struct.unpack('20s', self.torrent.piece_hashes[index])[0]
         got = sha1(bytes).digest()
         # import pdb
@@ -130,19 +188,33 @@ class Controller(object):
         else:
             print 'piece checked OK'
 
-    ##message senders#########
     def get_next_block(self):
         #usual, non-end values for index, begin, length
         index = self.pieces_requested.bin.find('0')
         if index > -1:
             begin = self.blocks_requested[index].bin.find('0') * 2**14
-            
-
             if (index == self.torrent.num_pieces - 1) and ('0' not in self.blocks_requested[index].bin[:-1]):
                 # print 'last block of last piece'
                 #last block of last piece
                 length = self.get_last_block_length_of_last_piece(index)
             elif index >= 0 and '0' not in self.blocks_requested[index].bin[:-1]:
+                # print 'last block of normal piece'
+                length = self.get_last_block_length(index)
+            else:
+                # print 'normal block'
+                length = 2**14
+
+            return {'index': index, 'begin': begin, 'length': length}
+
+    def re_request_blocks(self):
+        index = self.outstanding_pieces.bin.find('1')
+        if index > -1:
+            begin = self.outstanding_blocks[index].bin.find('1') * 2**14
+            if (index == self.torrent.num_pieces - 1) and ('1' not in self.outstanding_blocks[index].bin[:-1]):
+                # print 'last block of last piece'
+                #last block of last piece
+                length = self.get_last_block_length_of_last_piece(index)
+            elif index >= 0 and '1' not in self.outstanding_blocks[index].bin[:-1]:
                 # print 'last block of normal piece'
                 length = self.get_last_block_length(index)
             else:
@@ -165,32 +237,81 @@ class Controller(object):
         msg = generate_message(type, peer_id=peer_id)
         self.peer_dict[peer_id].factory.transport.write(msg.bytes)
 
+    @staticmethod
+    def split_file(file_paths, file_to_split):
+        for file_path in file_paths:
+            if len(file_path['path']) > 1:
+                path = '/'.join(file_path['path'][:-1])
+                # filename = file_path['path'][-1]
+                entire_path = '/'.join(file_path['path'])
+                if not os.path.exists(path):
+                    os.makedirs(path)
+            else:
+                entire_path = file_path['path'][0]
+            f = open(entire_path, 'w+b')
+            # import pdb
+            # pdb.set_trace()
+            # self.received_file.seek(seek_to)
+            f.write(file_to_split.read(file_path['length']))
+            f.close()
+
+
+
+
+
 class TorrentFile(object):
     def __init__(self, filepath):
         self.f = open(filepath, 'rb').read()
         self.decoded = bdecode(self.f)
         self.info = self.decoded['info']
+        self.piece_length = self.info['piece length']
         self.pieces = self.info['pieces']
+        self.name = self.info['name']
+        self.info_hash = sha1(bencode(self.decoded['info'])).digest()
         self.num_pieces = len(self.pieces)/20
         self.announce_url = self.decoded['announce']
-        self.info_hash = sha1(bencode(self.decoded['info'])).digest()
         self.piece_hashes = [self.pieces[i:20+i] for i in range(0, len(self.pieces), 20)]
-        self.piece_length = self.info['piece length']
-        self.file_length = self.info['length']
-        self.name = self.info['name']
+        if 'length' in self.info:
+            #single file mode
+            self.mode = 'single'
+            self.file_length = self.info['length']
+        if 'files' in self.info:
+            #multi file mode
+            self.mode = 'multi'
+            self.files = self.info['files']
+            self.file_lengths = [f['length'] for f in self.files]
+            self.file_length = sum(self.file_lengths)
+            # self.file_paths = [f for f in self.files]
+            # '/'.join([f['path'] for f in self.files])
+        # if 'files' in self.decoded:
+        #     import pdb
+        #     pdb.set_trace()
 
 class TrackerResponse(object):
     def __init__(self, torrent):
+        self.torrent = torrent
         self.request_payload = {'info_hash': torrent.info_hash,
-                                'peer_id': MY_PEER_ID}
+                                'peer_id': MY_PEER_ID,
+                                'port': 6881,
+                                'uploaded': 0,
+                                'downloaded': 0,
+                                'left': self.torrent.file_length,
+                                'compact': 1,
+                                'event': 'started',
+                                'numwant': 80,
+                                'supportcrypto': 0,
+                                'requirecrypto': 0
+                                }
         self.peers_str = self.req_peers_from_tracker(torrent)
         self.peers = [Peer(peer_str, self.request_payload['info_hash']) for peer_str in self.peers_str]
         # make a dictionary of peer_id:peer pairs
     
     def req_peers_from_tracker(self, torrent):
         print 'requesting peers'
-        r = requests.get(torrent.announce_url, params=self.request_payload)
-        response = bdecode(r.content)
+        resp = requests.get(torrent.announce_url, params=self.request_payload)
+        response = bdecode(resp.content)
+        # import pdb
+        # pdb.set_trace()
         peers_str = response['peers']
         peers = []
         for i in range(len(peers_str)/6):
@@ -202,12 +323,13 @@ class Peer(object):
                  status={'am_choking': 1,'am_interested': 0, 'peer_choking': 1, 'peer_interested':0}):
         self.ip, self.port = self.parse_peer_str(peer_str)
         self.factory = factory
+        self.protocol = None
         self.info_hash = info_hash
         self.peer_id = peer_id
         self.handshake = handshake
-        self.has_pieces = 0
+        self.has_pieces = '0'
         self.status = status # status is 4-item dict, values of am_choking, am_interested, peer_choking, peer_interested
-        self.messages_received = []
+        # self.messages_received = []
         # self.payload = payload
 
     def parse_peer_str(self, peer_str):
@@ -243,11 +365,16 @@ class PeerProtocol(Protocol):
 
 
     def connectionMade(self):
-        # print 'connection made to ' + self.factory.peer.ip
-        # import pdb
-        # pdb.set_trace()
+        print 'connection made to ' + self.factory.peer.ip
         sent_handshake = Handshake(self.controller.info_hash).handshake
         self.transport.write(sent_handshake)
+        lc = LoopingCall(self.send_keepalive)
+        lc.start(90)
+
+
+    def send_keepalive(self):
+        msg = KeepAlive()
+        self.transport.write(msg.bytes)
 
     def is_handshake(self, bytes):
         if bytes[1:20] == 'BitTorrent protocol':
@@ -264,13 +391,14 @@ class PeerProtocol(Protocol):
         received_handshake = Handshake(info_hash, pstr=pstr, reserved=reserved,
                                        peer_id=peer_id)
         self.factory.peer.peer_id = peer_id
+        # self.controller.peer_dict[peer_id].protocol = self
         self.controller.add_peer(self.factory.peer)
         self.shook_hands = True
         self.controller.peer_dict[peer_id].handshake = received_handshake
-        # print 'handshake received: ' + received_handshake.handshake
+        print 'handshake received from: %r' %self.transport.getPeer()
     
         inter = generate_message('interested')
-        # print 'sent an interested to %r' %(self.transport.getPeer())
+        print 'sent an interested to %r' %(self.transport.getPeer())
         self.transport.write(inter.bytes)
         self.controller.peer_dict[peer_id].status['am_interested'] = 1
         buff = buff[68:]
@@ -296,7 +424,7 @@ class PeerProtocol(Protocol):
             messages, self._buffer = Message.split_message(self._buffer, peer_id)
             for message in messages:
                 # print 'len of messages is: %d' %len(messages)
-                print 'received a %s from %s' %(message.type, self.transport.getPeer())
+                # print 'received a %s from %s' %(message.type, self.transport.getPeer())
                 
                 self.controller.handle(message)
 
@@ -308,9 +436,21 @@ class PeerProtocol(Protocol):
                 req = DiffRequest(block['index'], block['begin'], block['length'])
                 self.transport.write(req.bytes)
                 print 'sent req for index %d and begin %d with length %d to %r' %(req.index, req.begin, req.length, self.transport.getPeer())
+                
                 self.controller.blocks_requested[block['index']].overwrite('0b1', block['begin']/(2**14))
                 if '0' not in self.controller.blocks_requested[block['index']].bin:
                     self.controller.pieces_requested.overwrite('0b1', block['index'])
+
+            else:
+                block = self.controller.re_request_blocks()
+                if block:
+                    req = DiffRequest(block['index'], block['begin'], block['length'])
+                    self.transport.write(req.bytes)
+                    print 'sent req for index %d and begin %d with length %d to %r' %(req.index, req.begin, req.length, self.transport.getPeer())
+                    
+                    self.controller.outstanding_blocks[block['index']].overwrite('0b0', block['begin']/(2**14))
+                    if '1' not in self.controller.outstanding_blocks[block['index']].bin:
+                        self.controller.outstanding_pieces.overwrite('0b0', block['index'])
 
     def connectionLost(self, reason):
         print 'connection lost from: ' + self.factory.peer.ip
@@ -326,31 +466,42 @@ class PeerClientFactory(ClientFactory):
         return PeerProtocol(self, self.controller)
 
     def clientConnectionFailed(self, connector, reason):
-        print 'Failed: ', reason
+        print self.peer.ip, ' Failed: ', reason,
+
+
 
 def main():
+    # import pdb
+    # pdb.set_trace()
     try:
         filepath = sys.argv[1]
         torrent = TorrentFile(filepath)
-        # import pdb
-        # pdb.set_trace()
-    except:
-        sys.exit('Please enter a valid file path to a torrent')
-    if os.path.isfile(torrent.name):
-        print 'removing already existing file'
-        os.remove(torrent.name)
-    received_file = open(torrent.name, 'wb')
+    except Exception as err:
+        sys.exit('Please enter a valid file path to a valid torrent, error: %s'%err)
+
+    if torrent.mode == 'single':
+        received_file = open(torrent.name, 'w+b')
+    elif torrent.mode == 'multi':
+        received_file = open('temp', 'w+b')
+
     controller = Controller(torrent, received_file)
     tracker_response = TrackerResponse(torrent)
     peers = tracker_response.peers
+    # import pdb
+    # pdb.set_trace()
     #this needs to be changed to update when the controller gets new peers from the tracker
     for peer in peers:
         if peer.port != 0:
             peer.connect(controller)
-        
+    
+    lc1 = LoopingCall(controller.set_outstanding_blocks)
+    lc1.start(30)
 
     from twisted.internet import reactor
     reactor.run()
+
+
+
 
 
 if __name__ == '__main__':
